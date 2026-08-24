@@ -1,0 +1,41 @@
+[workspace]
+# Resolver 2 is the default for edition 2021+ members, but the *workspace*
+# manifest has no edition of its own, so it must be stated explicitly or Cargo
+# falls back to the ancient resolver 1 feature-unification rules.
+resolver = "2"
+members = [
+    "crates/engine",
+    "crates/terminal-emu",
+    "crates/manifest",
+    "crates/reducer",
+    "crates/session",
+    "crates/registry",
+    "crates/protocol",
+    "crates/control-server",
+    "cli",
+]
+
+# Metadata every member inherits via `field.workspace = true`, so bumping the
+# version or the repo URL is a one-line change instead of a ten-file sweep.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/hashimhashmi02/Argus"
+authors = ["Hashim <hashimhashmi02@gmail.com>"]
+
+# Single source of truth for dependency versions. A member crate writes
+# `portable-pty.workspace = true` and cannot drift to a different version than
+# its siblings -- which matters a lot for crates like `serde` whose types cross
+# crate boundaries in our protocol.
+[workspace.dependencies]
+anyhow = "1"
+portable-pty = "0.9"
+
+[profile.release]
+# Argus is a long-lived daemon holding PTY handles. A panic that unwinds
+# through a thread owning a live child process leaves that process orphaned and
+# invisible to the registry. Aborting is the more honest failure mode: the
+# supervisor sees the crash instead of inheriting a half-dead session table.
+panic = "abort"
