@@ -187,7 +187,19 @@ hard to debug once buried in async code:
   to idle. The parent is still working.
 
 Keeping all of this in a pure function with no I/O means it can be reasoned
-about, and tested, in isolation.
+about, and tested, in isolation. `crates/reducer` has no dependencies at all,
+and its whole test suite runs in microseconds because nothing in it sleeps.
+
+Two rules fell out of writing it that are worth stating explicitly:
+
+- **No match is not idle.** A frame where no rule fired is an *absence of
+  evidence*, so it changes nothing — including any debounce already in
+  progress. Treating it as idleness would make a session that alternates
+  between "idle" and "nothing matched" flicker forever.
+- **`Done` is absorbing.** A dead session's final screen is still sitting in
+  the emulator's grid, still matching whatever rule it matched a moment before
+  the exit. Without a guard, a finished agent argues itself back to "working"
+  forever.
 
 ### Why manifests are data
 
@@ -195,7 +207,31 @@ Adding support for a new agent should mean adding a JSON file, not writing Rust.
 Every agent-specific behaviour that would otherwise become a `match` arm inside
 `session` — how to launch it, how to resume it, which key approves a prompt,
 which regex means "blocked" — belongs in the manifest instead. The alternative is
-a growing pile of per-agent special cases in code that only I can extend.
+a growing pile of per-agent special cases in code that only I can extend. The
+rules are also the part most likely to need tuning, since CLIs change their
+wording between releases, so keeping them editable is the difference between a
+fix taking a minute and taking a release.
+
+See [manifests/README.md](manifests/README.md) for the format. Three decisions
+in it that are not obvious:
+
+- **Keys are names, not bytes.** `"approve": "enter"`, not `"approve": "\r"`. A
+  literal control character in a hand-edited config file is invisible in an
+  editor, does not survive being pasted anywhere, and is illegal in a JSON
+  string without an awkward unicode escape.
+- **Unknown fields are ignored, not rejected.** A manifest written for a newer
+  Argus must still load on an older one. The cost is that a typo is silently
+  dropped, which is why everything the schema *does* understand is validated
+  strictly, at load time, against a filename.
+- **Rules carry a region.** Prompts live at the bottom of the screen, so
+  restricting a blocker rule to the last few lines is the cheapest defence
+  against matching a question that was answered ten seconds ago but is still
+  visible.
+
+Patterns are `regex`-crate dialect: RE2-style, so no backreferences and no
+lookaround. That is a feature, not a limitation to work around — matching stays
+linear in the input, so a pathological rule in user-editable data cannot hang
+the daemon.
 
 ### Why a named pipe
 
@@ -242,8 +278,8 @@ Each step is a working, runnable checkpoint — not a half-finished layer.
 |---|---|---|
 | 1 | `pty`: spawn a shell via ConPTY, stream raw bytes | **done** |
 | 2 | `terminal-emu`: same stream through `alacritty_terminal`, print the grid | **done** |
-| 3 | `reducer` + a hand-written `claude-code.json`, with fake-clock unit tests | next |
-| 4 | `session`: steps 1-3 on a `tokio` task, exposing status/send/resize/kill | |
+| 3 | `reducer` + a hand-written `claude-code.json`, with fake-clock unit tests | **done** |
+| 4 | `session`: steps 1-3 on a `tokio` task, exposing status/send/resize/kill | next |
 | 5 | `protocol` + `control-server`: RPC types and a named pipe server | |
 | 6 | `cli`: spawn / list / screen / kill against the running engine | |
 | 7 | `registry` persistence: the session list survives an engine restart | |

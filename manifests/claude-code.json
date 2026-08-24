@@ -1,0 +1,55 @@
+{
+  "id": "claude-code",
+  "display_name": "Claude Code",
+  "launch": {
+    "program": "claude",
+    "args": []
+  },
+  "resume": {
+    "args": ["--continue"]
+  },
+  "env_scrub_prefixes": ["ARGUS_"],
+  "keys": {
+    "approve": "enter",
+    "deny": "escape"
+  },
+  "timing": {
+    "idle_debounce_ms": 900
+  },
+  "rules": [
+    {
+      "name": "permission-prompt",
+      "status": "needs_you",
+      "pattern": "Do you want to .*\\?",
+      "priority": 100,
+      "region": { "last_lines": 12 }
+    },
+    {
+      "name": "trust-prompt",
+      "status": "needs_you",
+      "pattern": "Do you trust the files in this folder\\?",
+      "priority": 100,
+      "region": { "last_lines": 16 }
+    },
+    {
+      "name": "numbered-choice",
+      "status": "needs_you",
+      "pattern": "(?m)^[^\\n]*[>❯]\\s*\\d+\\.\\s+\\S",
+      "priority": 90,
+      "region": { "last_lines": 12 }
+    },
+    {
+      "name": "busy-spinner",
+      "status": "working",
+      "pattern": "esc to interrupt",
+      "priority": 50
+    },
+    {
+      "name": "input-box-idle",
+      "status": "idle",
+      "pattern": "(?m)^\\s*[│|]\\s*>\\s",
+      "priority": 10,
+      "region": { "last_lines": 6 }
+    }
+  ]
+}

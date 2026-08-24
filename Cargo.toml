@@ -36,6 +36,10 @@ portable-pty = "0.9"
 # Parser + grid only; the crate's default "serde" feature is not needed and
 # pulls serde into a crate that never serializes anything.
 alacritty_terminal = { version = "0.26", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+thiserror = "2"
 
 [profile.release]
 # Argus is a long-lived daemon holding PTY handles. A panic that unwinds

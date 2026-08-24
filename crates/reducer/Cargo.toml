@@ -7,4 +7,11 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+# Off by default so the crate that holds Argus's central judgement compiles with
+# zero dependencies. Crates that need `Status` on the wire -- `argus-manifest`
+# reading it from JSON, `argus-protocol` putting it in an RPC response -- opt in.
+serde = ["dep:serde"]
+
 [dependencies]
+serde = { workspace = true, optional = true }

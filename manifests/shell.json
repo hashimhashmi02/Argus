@@ -1,0 +1,36 @@
+{
+  "id": "shell",
+  "display_name": "Shell",
+  "launch": {
+    "program": "powershell.exe",
+    "args": ["-NoLogo"]
+  },
+  "env_scrub_prefixes": ["ARGUS_"],
+  "keys": {
+    "approve": "enter",
+    "deny": "ctrl-c"
+  },
+  "rules": [
+    {
+      "name": "confirm-prompt",
+      "status": "needs_you",
+      "pattern": "(?im)\\[Y\\] Yes|\\(y/n\\)|Are you sure",
+      "priority": 100,
+      "region": { "last_lines": 4 }
+    },
+    {
+      "name": "powershell-prompt",
+      "status": "idle",
+      "pattern": "(?m)^PS [^\\n]*> *$",
+      "priority": 10,
+      "region": { "last_lines": 3 }
+    },
+    {
+      "name": "cmd-prompt",
+      "status": "idle",
+      "pattern": "(?m)^[A-Za-z]:\\\\[^\\n]*> *$",
+      "priority": 10,
+      "region": { "last_lines": 3 }
+    }
+  ]
+}
