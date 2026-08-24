@@ -5,6 +5,7 @@
 resolver = "2"
 members = [
     "crates/engine",
+    "crates/pty",
     "crates/terminal-emu",
     "crates/manifest",
     "crates/reducer",
