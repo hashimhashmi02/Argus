@@ -8,3 +8,15 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+# `Status` is the reducer's output alphabet, so the reducer owns it and this
+# crate borrows the vocabulary rather than inventing a parallel one that would
+# need mapping at every boundary.
+argus-reducer = { path = "../reducer", features = ["serde"] }
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# `thiserror` rather than `anyhow` because this is a library: a caller loading a
+# manifest may reasonably want to distinguish "this file is not valid JSON" from
+# "rule 3 has a broken regex" and report them differently. `anyhow` is the right
+# tool in a binary, where the answer is almost always "print it and exit".
+thiserror.workspace = true
