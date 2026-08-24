@@ -1,0 +1,4 @@
+# Normalize to LF in the repository regardless of what Windows checks out with.
+# Argus is Windows-native, but the repo is read on other platforms and by tools
+# that treat CRLF as a diff, so the stored form stays LF.
+* text=auto eol=lf

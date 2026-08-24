@@ -1,0 +1,10 @@
+# Pin the toolchain so every machine building Argus links the same way.
+#
+# The MSVC target is not incidental: `portable-pty`, the `windows-rs` family,
+# and (later) Tauri's WebView2 bindings are all developed and tested against
+# x86_64-pc-windows-msvc. The GNU target can be made to work but is the
+# unpaved road for Win32-adjacent crates.
+[toolchain]
+channel = "stable"
+targets = ["x86_64-pc-windows-msvc"]
+components = ["rustfmt", "clippy"]

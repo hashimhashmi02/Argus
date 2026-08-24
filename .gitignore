@@ -1,0 +1,12 @@
+# Rust build output
+/target/
+
+# Argus runtime state written by the engine daemon (registry snapshots,
+# session logs). Never commit a user's session history.
+/.argus/
+
+# Editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
