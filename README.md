@@ -9,8 +9,9 @@ and which is **done**.
 
 Windows-native, written in Rust, built on [ConPTY](https://devblogs.microsoft.com/commandline/windows-command-line-introducing-the-windows-pseudo-console-conpty/).
 
-> **Status: early.** Step 2 of 8. The PTY layer and headless terminal emulation
-> work; there is no status detection and no UI yet.
+> **Status: early.** Step 3 of 8. The PTY layer, headless terminal emulation,
+> the status state machine and the agent manifests all work — but nothing has
+> wired them together into a live session yet, and there is no UI.
 > See [DESIGN.md](DESIGN.md) for the architecture and the build order.
 
 ## Why
