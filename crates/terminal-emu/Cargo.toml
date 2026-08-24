@@ -8,3 +8,13 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+alacritty_terminal.workspace = true
+
+# `argus-pty` is a *dev*-dependency on purpose. This crate must never depend on
+# the PTY layer: its whole value is being drivable from a `&[u8]`, which is what
+# makes it testable with byte fixtures and reusable from anywhere. Cargo lets
+# examples use dev-dependencies, so `examples/screen.rs` can wire an emulator to
+# a real ConPTY without that edge existing in the real dependency graph.
+[dev-dependencies]
+anyhow.workspace = true
+argus-pty = { path = "../pty" }
