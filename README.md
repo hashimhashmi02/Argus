@@ -9,7 +9,8 @@ and which is **done**.
 
 Windows-native, written in Rust, built on [ConPTY](https://devblogs.microsoft.com/commandline/windows-command-line-introducing-the-windows-pseudo-console-conpty/).
 
-> **Status: early.** Step 1 of 8. The PTY layer works; there is no UI yet.
+> **Status: early.** Step 2 of 8. The PTY layer and headless terminal emulation
+> work; there is no status detection and no UI yet.
 > See [DESIGN.md](DESIGN.md) for the architecture and the build order.
 
 ## Why
@@ -27,15 +28,24 @@ Requires the Rust MSVC toolchain (`rustup default stable-x86_64-pc-windows-msvc`
 and the Visual Studio Build Tools C++ workload for the linker.
 
 ```bash
+cargo run -p argus-terminal-emu --example screen
+```
+
+Spawns a real shell on a pseudo-console, feeds its output through a headless
+terminal emulator, and redraws the emulated screen whenever it changes. Type
+`exit` to leave.
+
+To see why that emulator is necessary, run the step 1 checkpoint instead — the
+same stream, unparsed:
+
+```bash
 cargo run -p argus-pty --bin pty-smoke
 ```
 
-This spawns a real shell on a pseudo-console and streams its raw output —
-escape sequences and all. Type `exit` to leave.
-
-The output is deliberately unreadable in places. That is the point: parsing
-status out of a raw byte stream is unreliable, which is why step 2 puts a
-headless terminal emulator in front of it. See
+The raw output is deliberately unreadable in places. Characters get overwritten
+in place, text is printed and then erased, and words arrive one letter at a time
+between colour changes. Matching a status out of that is unreliable; matching it
+out of the rendered screen is not. See
 [DESIGN.md](DESIGN.md#why-headless-terminal-emulation).
 
 ## Acknowledgements

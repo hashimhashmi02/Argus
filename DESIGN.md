@@ -136,6 +136,37 @@ renderer attached — yields the same screen a human would see. Matching against
 that is the difference between status detection that works and status detection
 that works in the demo.
 
+Here is PowerShell echoing the word `echo`, captured from the step 1 smoke test:
+
+```text
+^[[93me^[[?25h^[[m^[[93m^Hecho ^[[37mhello-from-powershell
+```
+
+The letter `e` is printed, the cursor is moved back over it, then `echo` is
+printed on top — with four colour changes along the way. A regex for `echo`
+against those bytes matches something the user never saw in that form. Run it
+through the emulator and it renders as `echo hello-from-powershell`, which is
+what was on screen. `crates/terminal-emu/tests/screen.rs` asserts exactly that,
+along with the two symmetrical failure modes: text that was printed and then
+erased must *not* match, and text assembled from several separate writes must.
+
+### A terminal is not a passive sink
+
+The emulator does not just consume bytes; it produces them. The far end asks the
+terminal questions — where is the cursor, what is your size, what colour is
+index 4 — and blocks waiting for answers. Step 1 discovered this when ConPTY's
+startup `ESC[6n` went unanswered and the shell never started.
+
+So `TerminalEmulator::advance` returns the bytes a real terminal would have
+written back, and the caller is obliged to send them to the PTY. It does not
+perform the write itself, because owning a PTY handle would make the crate
+untestable and would put a dependency edge in the wrong direction. The emulator
+stays a function from `&[u8]` to a screen plus a reply; where the bytes came
+from is `argus-session`'s problem in step 4.
+
+This is also why step 1's hardcoded `ESC[1;1R` reply could be deleted. A raw
+byte pipe genuinely does not know where the cursor is. The emulator does.
+
 ### Why the reducer is pure, and why `now` is a parameter
 
 `reduce` takes the current time as an argument and never reads the clock.
@@ -210,8 +241,8 @@ Each step is a working, runnable checkpoint — not a half-finished layer.
 | # | Step | State |
 |---|---|---|
 | 1 | `pty`: spawn a shell via ConPTY, stream raw bytes | **done** |
-| 2 | `terminal-emu`: same stream through `alacritty_terminal`, print the grid | next |
-| 3 | `reducer` + a hand-written `claude-code.json`, with fake-clock unit tests | |
+| 2 | `terminal-emu`: same stream through `alacritty_terminal`, print the grid | **done** |
+| 3 | `reducer` + a hand-written `claude-code.json`, with fake-clock unit tests | next |
 | 4 | `session`: steps 1-3 on a `tokio` task, exposing status/send/resize/kill | |
 | 5 | `protocol` + `control-server`: RPC types and a named pipe server | |
 | 6 | `cli`: spawn / list / screen / kill against the running engine | |
