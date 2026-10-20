@@ -233,6 +233,60 @@ lookaround. That is a feature, not a limitation to work around — matching stay
 linear in the input, so a pathological rule in user-editable data cannot hang
 the daemon.
 
+### How a session runs
+
+`crates/session` is the only place that knows the whole pipeline exists:
+
+```text
+ConPTY bytes -> emulator -> screen -> manifest rules -> reducer -> status
+                    |                                      ^
+                    +---- write-backs to the PTY           |
+                                           hook signals ---+
+```
+
+One `tokio` task per session, waking on three things: PTY output, a client
+command, or a timer tick. Status is re-evaluated on every wakeup.
+
+**The tick is the design, not a detail.** A debounce is a claim about elapsed
+time, and elapsed time passes whether or not the child says anything. A loop
+that only woke on bytes would pin a session at "working" from the moment it
+genuinely went quiet — the one case the debounce exists to resolve.
+
+**This is where the clock lives.** The reducer never reads one. The session
+task holds a single `Instant` and hands the reducer a `Timestamp`. Everything
+below this layer is deterministic.
+
+**Reads and writes take different routes.** Commands travel an `mpsc` channel
+because they must be ordered and applied by the task that owns the PTY. Status
+comes from a `watch` channel holding the latest snapshot, which never waits on
+the task. A UI listing a dozen sessions reads every one of them on each repaint,
+and those reads must not queue behind a busy session's input.
+
+**The step 1 lessons are properties of the session, not caller obligations.**
+The blocking reader is on its own OS thread feeding a *bounded* channel, so a
+flood of output backpressures the child rather than growing a queue. Input sent
+before the child's first output is held, not lost to the unfinished handshake.
+On exit the task observes it, closes the console, then drains to EOF. And
+because the task alone writes to the PTY — keystrokes and emulator replies
+alike — no mutex is needed anywhere.
+
+**Dropping a `Session` does not kill the child.** That is the daemon/client
+split expressed as a type: a session survives whatever was watching it.
+
+### Live tests find what fixtures cannot
+
+Step 3's manifest tests fed rules hand-written arrays of lines, and they all
+passed. The first live session test failed immediately: a rule restricted to
+`last_lines: 3` never matched an idle shell. A real emulated screen is padded
+with blank rows until it fills — a fresh `cmd.exe` is three lines of content
+above twenty-seven empty ones — and "the last three lines" was being counted
+from the bottom of the grid. No fixture had trailing blanks, so no fixture could
+have caught it.
+
+Regions now count back from the last line with content. The broader lesson is
+why `crates/session/tests/live.rs` drives a real process: the composition has
+failure modes that none of its parts have on their own.
+
 ### Why a named pipe
 
 Named pipes are the native Windows IPC primitive and they carry an ACL, so
@@ -279,8 +333,8 @@ Each step is a working, runnable checkpoint — not a half-finished layer.
 | 1 | `pty`: spawn a shell via ConPTY, stream raw bytes | **done** |
 | 2 | `terminal-emu`: same stream through `alacritty_terminal`, print the grid | **done** |
 | 3 | `reducer` + a hand-written `claude-code.json`, with fake-clock unit tests | **done** |
-| 4 | `session`: steps 1-3 on a `tokio` task, exposing status/send/resize/kill | next |
-| 5 | `protocol` + `control-server`: RPC types and a named pipe server | |
+| 4 | `session`: steps 1-3 on a `tokio` task, exposing status/send/resize/kill | **done** |
+| 5 | `protocol` + `control-server`: RPC types and a named pipe server | next |
 | 6 | `cli`: spawn / list / screen / kill against the running engine | |
 | 7 | `registry` persistence: the session list survives an engine restart | |
 | 8 | `app/`: the Tauri UI, only once the protocol is stable | |
