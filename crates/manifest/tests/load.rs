@@ -365,3 +365,126 @@ fn the_shell_manifest_recognises_a_powershell_prompt() {
     assert_eq!(matched.status, Some(Status::Idle));
     assert_eq!(matched.rule.as_deref(), Some("powershell-prompt"));
 }
+
+// ---- shell.json against real screen shapes ---------------------------------
+//
+// Found by the step 6 end-to-end run: with no rule that said *working*, a shell
+// that had reached idle stayed idle through a 60-second `Start-Sleep`, because
+// a screen no rule matches is -- correctly -- treated by the reducer as no new
+// evidence. A shell's real rule is simpler than a list of prompts: a bare
+// prompt on the last line means idle, anything else there means busy.
+
+fn shell() -> Agent {
+    Agent::from_path(manifest_dir().join("shell.json")).unwrap()
+}
+
+#[test]
+fn a_shell_running_a_command_is_working() {
+    let screen = [
+        "Windows PowerShell",
+        "",
+        r"PS C:\Users\Hashim> Start-Sleep 60",
+    ];
+    let matched = shell().classify(&screen);
+    assert_eq!(
+        matched.status,
+        Some(Status::Working),
+        "rule: {:?}",
+        matched.rule
+    );
+}
+
+#[test]
+fn a_shell_printing_output_is_working() {
+    let screen = [
+        r"PS C:\Users\Hashim> ping localhost",
+        "Pinging localhost [::1] with 32 bytes of data:",
+        "Reply from ::1: time<1ms",
+    ];
+    assert_eq!(shell().classify(&screen).status, Some(Status::Working));
+}
+
+#[test]
+fn an_earlier_bare_prompt_does_not_make_a_busy_shell_idle() {
+    // Enter on an empty prompt leaves a bare prompt line behind. It is still
+    // within a few lines of the bottom when the next command starts, and must
+    // not be mistaken for the shell waiting.
+    let screen = [
+        r"PS C:\Users\Hashim>",
+        r"PS C:\Users\Hashim> Start-Sleep 60",
+    ];
+    assert_eq!(shell().classify(&screen).status, Some(Status::Working));
+}
+
+#[test]
+fn a_bare_prompt_at_the_bottom_is_idle_even_with_trailing_blank_rows() {
+    let mut screen: Vec<String> = [
+        r"PS C:\Users\Hashim> Write-Output hi",
+        "hi",
+        r"PS C:\Users\Hashim>",
+    ]
+    .map(String::from)
+    .to_vec();
+    screen.extend(std::iter::repeat_n(String::new(), 20));
+
+    let matched = shell().classify(&screen);
+    assert_eq!(matched.status, Some(Status::Idle));
+    assert_eq!(matched.rule.as_deref(), Some("powershell-prompt"));
+}
+
+#[test]
+fn a_cmd_prompt_at_the_bottom_is_idle() {
+    let screen = [r"C:\Users\Hashim>echo hi", "hi", "", r"C:\Users\Hashim>"];
+    let matched = shell().classify(&screen);
+    assert_eq!(matched.status, Some(Status::Idle));
+    assert_eq!(matched.rule.as_deref(), Some("cmd-prompt"));
+}
+
+#[test]
+fn a_confirmation_outranks_busy() {
+    let screen = [
+        r"PS C:\Users\Hashim> Remove-Item .\build -Recurse",
+        "Are you sure you want to continue?",
+        "[Y] Yes  [A] Yes to All  [N] No  [L] No to All  [S] Suspend  [?] Help (default is \"Y\"):",
+    ];
+    assert_eq!(shell().classify(&screen).status, Some(Status::NeedsYou));
+}
+
+#[test]
+fn a_question_on_the_last_line_needs_you() {
+    let screen = [
+        r"PS C:\Users\Hashim> Read-Host 'Deploy to production. Are you sure (y/n)'",
+        "Deploy to production. Are you sure (y/n):",
+    ];
+    assert_eq!(shell().classify(&screen).status, Some(Status::NeedsYou));
+}
+
+#[test]
+fn an_answered_question_still_on_screen_does_not_need_you() {
+    // Found live in step 6: after answering `n`, the session stayed NEEDS YOU,
+    // because the question was still within the last four lines. A question
+    // that has a fresh prompt beneath it has been answered. Only the last line
+    // says what the shell is waiting for.
+    let screen = [
+        r"PS C:\Users\Hashim> Read-Host 'Deploy to production. Are you sure (y/n)'",
+        "Deploy to production. Are you sure (y/n): n",
+        "n",
+        r"PS C:\Users\Hashim>",
+    ];
+    let matched = shell().classify(&screen);
+    assert_eq!(
+        matched.status,
+        Some(Status::Idle),
+        "rule: {:?}",
+        matched.rule
+    );
+}
+
+#[test]
+fn a_blank_screen_is_no_information_not_busy() {
+    // Before the shell has printed anything, nothing should be claimed. The
+    // busy rule must need actual content, or every session would start by
+    // asserting "working" from an empty grid.
+    let blank = vec![String::new(); 30];
+    assert_eq!(shell().classify(&blank).status, None);
+}
