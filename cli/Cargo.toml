@@ -12,3 +12,21 @@ name = "argus-cli"
 path = "src/main.rs"
 
 [dependencies]
+anyhow.workspace = true
+argus-control-server = { path = "../crates/control-server" }
+# Only for `key_bytes`, so `send --key enter` uses the exact same key names a
+# manifest does. One vocabulary for keys, not two that drift apart.
+argus-manifest = { path = "../crates/manifest" }
+argus-protocol = { path = "../crates/protocol" }
+clap.workspace = true
+serde_json.workspace = true
+# A CLI makes one call and exits, so a single-threaded runtime: spinning up a
+# worker pool for one round trip would cost more than the round trip.
+tokio = { workspace = true, features = ["rt", "macros"] }
+
+[dev-dependencies]
+argus-control-server = { path = "../crates/control-server" }
+argus-manifest = { path = "../crates/manifest" }
+serde_json.workspace = true
+argus-engine = { path = "../crates/engine" }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "process", "time", "sync"] }
