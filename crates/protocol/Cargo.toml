@@ -7,4 +7,11 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+# No async runtime, no sockets, no pipes. This crate is the contract between the
+# engine and every client, and the one way to guarantee it never grows a hidden
+# dependency on how bytes move is to give it nothing that could move them.
 [dependencies]
+argus-reducer = { path = "../reducer", features = ["serde"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

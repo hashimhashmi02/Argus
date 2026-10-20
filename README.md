@@ -9,9 +9,10 @@ and which is **done**.
 
 Windows-native, written in Rust, built on [ConPTY](https://devblogs.microsoft.com/commandline/windows-command-line-introducing-the-windows-pseudo-console-conpty/).
 
-> **Status: early.** Step 4 of 8. A live session works end to end — spawn an
-> agent, watch its status move between working, idle, needs-you and done — but
-> only in-process. There is no daemon, no control API and no UI yet.
+> **Status: early.** Step 5 of 8. The engine runs as a daemon, owns live agent
+> sessions, and serves a control API over a named pipe. There is no command-line
+> client yet (step 6), sessions do not survive an engine restart (step 7), and
+> there is no UI.
 > See [DESIGN.md](DESIGN.md) for the architecture and the build order.
 
 ## Why
@@ -27,6 +28,26 @@ the Argus window never kills a running agent.
 
 Requires the Rust MSVC toolchain (`rustup default stable-x86_64-pc-windows-msvc`)
 and the Visual Studio Build Tools C++ workload for the linker.
+
+Start the engine:
+
+```bash
+cargo run -p argus-engine
+```
+
+It loads every manifest in `manifests/` and listens on
+`\\.\pipe\argus-<your username>`. There is no client binary yet — that is step
+6 — but the protocol is plain length-prefixed JSON, so anything that can open a
+named pipe can drive it. A request looks like this:
+
+```json
+{"version":1,"method":"spawn","agent":"shell"}
+```
+
+See [DESIGN.md](DESIGN.md#the-wire-protocol) for the framing and
+`crates/protocol` for every request and reply.
+
+To watch a single session's status in-process, without the engine:
 
 ```bash
 cargo run -p argus-session --example watch

@@ -7,4 +7,8 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+# No dependency on `argus-session`: the registry is generic over the live
+# handle it stores, which keeps it below the session layer in the dependency
+# graph and testable without spawning anything.
 [dependencies]
+thiserror.workspace = true

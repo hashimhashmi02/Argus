@@ -294,6 +294,65 @@ access control is the job of the operating system rather than something Argus
 invents. A TCP socket on localhost would be portable and would also mean any
 process on the machine can talk to the daemon.
 
+The pipe is `\\.\pipe\argus-<username>`: one per Windows user, so two people on
+one machine each get their own engine.
+
+**This API can spawn programs as the user**, so two properties are set
+explicitly rather than inherited from library defaults:
+
+- **Remote clients are rejected.** A named pipe is reachable over SMB as
+  `\\host\pipe\name` unless told otherwise, and remote access to an API that
+  runs programs is remote code execution.
+- **The first instance must be ours.** If another process already owns the
+  name, the engine refuses to start rather than becoming one more instance of an
+  impostor's pipe.
+
+Not yet done: a client verifying the server process's identity via
+`GetNamedPipeServerProcessId`. Until then, a process that creates the pipe
+*before* the engine starts can impersonate it. Worth closing before Argus is
+trusted on a shared machine.
+
+### The wire protocol
+
+Length-prefixed JSON: a 4-byte big-endian length, then that many bytes of JSON.
+Framing is needed because a byte-mode pipe delivers a stream with no message
+boundaries; two writes can arrive as one read or be split across three, and
+"one read = one message" code works on an idle machine and corrupts messages
+under load.
+
+`argus-protocol` is **sans-I/O**: its decoder never reads from anything. Bytes go
+in however they arrived; complete messages come out. Server and client share one
+implementation, and the awkward cases — a header split across reads, two frames
+in one read — are tested with byte literals rather than a real pipe and luck.
+
+Three rules the codec enforces:
+
+- **A 1 MiB frame limit, checked from the header alone**, before a byte of body
+  is buffered. Otherwise the length prefix is an allocation request from
+  whoever is on the other end of the pipe.
+- **An oversized frame is fatal for the connection; a malformed payload is
+  not.** After refusing to read a frame there is no way to find where the next
+  one starts. But a frame whose length was valid and whose JSON was not has
+  already been consumed whole, so the client gets an error reply and keeps its
+  connection.
+- **Every request carries `PROTOCOL_VERSION`.** Sharing the protocol crate
+  prevents drift between binaries built from the same source — and only those.
+  An `argus-cli` from last month talking to this week's engine was not, and
+  nothing in the type system can see it, so the engine refuses a mismatch by
+  name instead of misreading the bytes.
+
+The JSON is deliberately readable — `{"version":1,"method":"list"}` — so it can
+be written by hand from any language. Step 5 was verified that way, from
+PowerShell on .NET's `NamedPipeClientStream` with the framing done by hand.
+
+### Session ids
+
+Eight hex characters, accepted by any unique prefix the way git accepts a short
+hash, because people type them. An ambiguous prefix lists the candidates; an
+empty one matches nothing rather than everything. Ids mix the clock and process
+id with a counter so they do not repeat across engine restarts, which matters
+once step 7 persists them.
+
 ## Hardening rules
 
 These are not hypothetical. They come from the bug history of Zeus and from the
@@ -334,8 +393,8 @@ Each step is a working, runnable checkpoint — not a half-finished layer.
 | 2 | `terminal-emu`: same stream through `alacritty_terminal`, print the grid | **done** |
 | 3 | `reducer` + a hand-written `claude-code.json`, with fake-clock unit tests | **done** |
 | 4 | `session`: steps 1-3 on a `tokio` task, exposing status/send/resize/kill | **done** |
-| 5 | `protocol` + `control-server`: RPC types and a named pipe server | next |
-| 6 | `cli`: spawn / list / screen / kill against the running engine | |
+| 5 | `protocol` + `control-server`: RPC types and a named pipe server | **done** |
+| 6 | `cli`: spawn / list / screen / kill against the running engine | next |
 | 7 | `registry` persistence: the session list survives an engine restart | |
 | 8 | `app/`: the Tauri UI, only once the protocol is stable | |
 

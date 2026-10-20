@@ -7,8 +7,27 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+# A library *and* a binary. The binary is a thin `main` that parses arguments and
+# runs the server; everything worth testing lives in the library, where an
+# integration test can drive it over a real pipe without going through a
+# command line.
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "argus-engine"
 path = "src/main.rs"
 
 [dependencies]
+anyhow.workspace = true
+argus-control-server = { path = "../control-server" }
+argus-manifest = { path = "../manifest" }
+argus-protocol = { path = "../protocol" }
+argus-reducer = { path = "../reducer" }
+argus-registry = { path = "../registry" }
+argus-session = { path = "../session" }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "sync"] }
+
+[dev-dependencies]
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
