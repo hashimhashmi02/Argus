@@ -269,3 +269,34 @@ async fn a_dropped_session_keeps_running() {
 
     assert!(handle.kill().await);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn status_age_measures_time_in_the_current_status_not_since_spawn() {
+    let session = Session::spawn(shell_agent(), SessionConfig::default()).unwrap();
+    let mut handle = session.handle();
+
+    wait_for(&mut handle, "the first prompt", |s| {
+        s.status == Status::Idle
+    })
+    .await;
+
+    // Idle is entered some time after spawn, so time-in-status must be strictly
+    // less than total age. If they were equal, the two would be measuring from
+    // different instants -- or the same wrong one.
+    let first = handle.status_age();
+    assert!(
+        first < handle.age(),
+        "status age {first:?} should be under session age"
+    );
+
+    // And it keeps counting while nothing changes, even though no snapshot is
+    // published in that time. A stored value would be frozen at the last change.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let second = handle.status_age();
+    assert!(
+        second >= first + Duration::from_millis(250),
+        "status age should advance on its own: {first:?} -> {second:?}"
+    );
+
+    assert!(handle.kill().await);
+}

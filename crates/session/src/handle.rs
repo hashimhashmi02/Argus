@@ -1,5 +1,7 @@
 //! The client-facing side of a session.
 
+use std::time::{Duration, Instant};
+
 use argus_reducer::{HookSignal, Status};
 use tokio::sync::{mpsc, watch};
 
@@ -36,14 +38,42 @@ pub(crate) enum Command {
 pub struct SessionHandle {
     commands: mpsc::Sender<Command>,
     snapshot: watch::Receiver<SessionSnapshot>,
+    /// The same instant the session task measures `since` from.
+    started: Instant,
 }
 
 impl SessionHandle {
     pub(crate) fn new(
         commands: mpsc::Sender<Command>,
         snapshot: watch::Receiver<SessionSnapshot>,
+        started: Instant,
     ) -> Self {
-        Self { commands, snapshot }
+        Self {
+            commands,
+            snapshot,
+            started,
+        }
+    }
+
+    /// How long since the session was spawned.
+    pub fn age(&self) -> Duration {
+        self.started.elapsed()
+    }
+
+    /// How long the session has held its current status.
+    ///
+    /// The number a person actually wants -- "needs you *for four minutes*" is
+    /// what says which window to look at first. Computed on demand rather than
+    /// stored in the snapshot, because a snapshot is only republished when
+    /// something changes, and a session that has been idle for an hour has, by
+    /// definition, not changed in an hour.
+    pub fn status_age(&self) -> Duration {
+        let since = self
+            .snapshot
+            .borrow()
+            .since
+            .saturating_since(argus_reducer::Timestamp::ZERO);
+        self.age().saturating_sub(since)
     }
 
     /// The most recent snapshot. Never blocks, never fails, never waits on the

@@ -20,6 +20,7 @@ fn session() -> SessionInfo {
         agent: "shell".into(),
         status: Status::NeedsYou,
         since_ms: 1500,
+        status_for_ms: 240_000,
         rule: Some("permission-prompt".into()),
         pid: Some(4242),
         exit_code: None,
@@ -260,4 +261,15 @@ fn encoding_refuses_to_produce_a_frame_the_peer_must_reject() {
         encode(&Envelope::new(huge)),
         Err(CodecError::TooLarge { .. })
     ));
+}
+
+#[test]
+fn a_reply_from_an_engine_predating_status_for_ms_still_parses() {
+    // `status_for_ms` was added after v1 without a version bump. That is only
+    // sound if a newer client can read an older engine's reply, which simply
+    // lacks the field. It must default rather than fail.
+    let old = r#"{"id":"a1","agent":"shell","status":"idle","since_ms":10}"#;
+    let info: SessionInfo = serde_json::from_str(old).unwrap();
+    assert_eq!(info.status_for_ms, 0);
+    assert_eq!(info.status, Status::Idle);
 }

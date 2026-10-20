@@ -215,6 +215,7 @@ fn info(entry: &Entry<SessionHandle>) -> SessionInfo {
         agent: entry.agent.clone(),
         status: snapshot.status,
         since_ms: snapshot.since.saturating_since(Timestamp::ZERO).as_millis() as u64,
+        status_for_ms: entry.handle.status_age().as_millis() as u64,
         rule: snapshot.rule,
         pid: snapshot.pid,
         exit_code: snapshot.exit_code,
