@@ -135,8 +135,19 @@ fn region_text<S: AsRef<str>>(lines: &[S], region: Region) -> String {
     let slice = match region {
         Region::Screen => lines,
         Region::LastLines(n) => {
-            let start = lines.len().saturating_sub(n);
-            &lines[start..]
+            // Count from the last line with anything on it, not from the bottom
+            // of the grid. A terminal that has not filled up yet has its content
+            // at the top and blank rows below -- a fresh shell is three lines of
+            // banner and prompt above twenty-seven empty ones. Counting from the
+            // grid's bottom edge would make "the last three lines" mean "three
+            // blank lines" and no bottom-anchored rule would ever match until
+            // the screen had scrolled. Found by the first live session test.
+            let content_end = lines
+                .iter()
+                .rposition(|line| !line.as_ref().trim().is_empty())
+                .map_or(0, |last| last + 1);
+            let start = content_end.saturating_sub(n);
+            &lines[start..content_end]
         }
     };
 

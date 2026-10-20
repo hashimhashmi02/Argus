@@ -122,11 +122,16 @@ pub enum Region {
     #[default]
     Screen,
 
-    /// Only the last N lines.
+    /// Only the last N lines *of content*.
     ///
     /// Prompts live at the bottom. Restricting a blocker rule to the last few
     /// lines is the cheapest defence against the most common false positive:
     /// matching a question that scrolled up and was answered ten seconds ago but
     /// is still sitting on screen.
+    ///
+    /// Counted back from the last non-blank line, not from the bottom edge of
+    /// the terminal. A screen that has not filled up yet has blank rows beneath
+    /// its content, and those are not "the bottom" in any sense a rule author
+    /// means.
     LastLines(usize),
 }
