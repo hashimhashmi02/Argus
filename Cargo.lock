@@ -58,6 +58,17 @@ dependencies = [
 [[package]]
 name = "argus-engine"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "argus-control-server",
+ "argus-manifest",
+ "argus-protocol",
+ "argus-reducer",
+ "argus-registry",
+ "argus-session",
+ "serde_json",
+ "tokio",
+]
 
 [[package]]
 name = "argus-manifest"
@@ -663,6 +674,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
