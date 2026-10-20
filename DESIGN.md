@@ -287,6 +287,36 @@ Regions now count back from the last line with content. The broader lesson is
 why `crates/session/tests/live.rs` drives a real process: the composition has
 failure modes that none of its parts have on their own.
 
+### What the client found
+
+Building `argus-cli` before any UI was meant to flush out problems while they
+were cheap, and it found four in one step — none of which any earlier test had
+seen, because each only shows up when the whole system runs together.
+
+- **A protocol gap.** The most useful thing a session list can say is "needs
+  you *for four minutes*". The client cannot compute that: it knows when a
+  status began relative to spawn, but not when spawn was. The engine now reports
+  `status_for_ms`. Added without a version bump, deliberately, because an
+  additive field with a default is misread by nobody — and that, not "did a
+  struct change", is the test for whether a change needs one.
+- **A busy shell read as idle.** `shell.json` had rules for idle and none for
+  working. Once a shell reached idle, a long command left a screen that matched
+  nothing, and the reducer correctly treats that as no new evidence — so the
+  session stayed idle for the whole command.
+- **An answered question still read as NEEDS YOU.** The question stayed within
+  the bottom four lines after it was answered.
+- **A typed pipe path did not survive the shell.** Git Bash rewrote
+  `\\.\pipe\name` before the program saw it, so "engine not running" came back
+  as "path not found" depending on which shell ran the command. Both binaries
+  now accept a bare name.
+
+The two manifest bugs share one cause and one fix: **for a shell, only the last
+line of content says what it is doing.** A bare prompt there is idle, a question
+there needs you, and anything else there is busy. A lowest-priority rule
+matching any visible character expresses "anything else" without listing every
+command that could be running. The general lesson for manifest authors is in
+[manifests/README.md](manifests/README.md).
+
 ### Why a named pipe
 
 Named pipes are the native Windows IPC primitive and they carry an ACL, so
@@ -394,8 +424,8 @@ Each step is a working, runnable checkpoint — not a half-finished layer.
 | 3 | `reducer` + a hand-written `claude-code.json`, with fake-clock unit tests | **done** |
 | 4 | `session`: steps 1-3 on a `tokio` task, exposing status/send/resize/kill | **done** |
 | 5 | `protocol` + `control-server`: RPC types and a named pipe server | **done** |
-| 6 | `cli`: spawn / list / screen / kill against the running engine | next |
-| 7 | `registry` persistence: the session list survives an engine restart | |
+| 6 | `cli`: spawn / list / screen / kill against the running engine | **done** |
+| 7 | `registry` persistence: the session list survives an engine restart | next |
 | 8 | `app/`: the Tauri UI, only once the protocol is stable | |
 
 The UI is last on purpose. A UI built on an unstable protocol locks in the

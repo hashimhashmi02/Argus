@@ -60,15 +60,44 @@ Rules match against the *rendered screen*, never the raw byte stream. See
 [DESIGN.md](../DESIGN.md#why-headless-terminal-emulation) for why that
 distinction is the whole point.
 
+## Writing rules that hold up
+
+Two lessons from running real sessions, both learned the hard way in step 6:
+
+**Every manifest needs a way to say *working*.** A screen no rule matches is
+treated as *no new evidence*, so the status stays wherever it was. If a manifest
+can only recognise idle, a session that reaches idle stays idle while it is busy.
+For a shell, a lowest-priority catch-all is enough:
+
+```json
+{ "name": "busy", "status": "working", "pattern": "\\S", "priority": 1,
+  "region": { "last_lines": 1 } }
+```
+
+That matches any visible character on the last line, so it covers a running
+command, scrolling output, and programs that print as they go — and because it
+is the lowest priority, any real prompt still wins.
+
+**A prompt is only live at the bottom.** A question that has been answered is
+still on screen, usually with a fresh prompt beneath it. A region of several
+lines will keep matching it and report NEEDS YOU long after the user replied. For
+a shell, `last_lines: 1` is right for every rule: only the last line of content
+says what it is doing. TUIs that draw their input box at the bottom need a few
+lines, but keep the region as tight as the prompt allows.
+
 ## A note on the patterns shipped here
 
-The rules in `claude-code.json` are a starting point written from the shape of
-the CLI, not from captured transcripts. They are structurally correct — right
-statuses, right priorities, right regions — but the exact wording will need
-tuning against real sessions once step 4 can run an agent under Argus and record
-what its screens actually look like. Treat any misclassification as a bug in
-this file first.
+`shell.json` is verified against real PowerShell sessions driven through the
+engine: idle at a prompt, working during a command, NEEDS YOU at a `(y/n)`
+question, and back to idle once answered.
 
-`shell.json` is different: its prompts are stable and already verified against
-the PTY layer, which makes it the useful manifest for testing the machinery
-itself.
+The rules in `claude-code.json` are still a starting point written from the
+shape of the CLI rather than from captured sessions. They are structurally
+correct but unverified, and the lessons above probably apply to them too. Check
+one with:
+
+```bash
+cargo run -p argus-cli -- spawn claude-code
+```
+
+Treat any misclassification as a bug in this file first.
