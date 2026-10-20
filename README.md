@@ -9,9 +9,9 @@ and which is **done**.
 
 Windows-native, written in Rust, built on [ConPTY](https://devblogs.microsoft.com/commandline/windows-command-line-introducing-the-windows-pseudo-console-conpty/).
 
-> **Status: early.** Step 3 of 8. The PTY layer, headless terminal emulation,
-> the status state machine and the agent manifests all work — but nothing has
-> wired them together into a live session yet, and there is no UI.
+> **Status: early.** Step 4 of 8. A live session works end to end — spawn an
+> agent, watch its status move between working, idle, needs-you and done — but
+> only in-process. There is no daemon, no control API and no UI yet.
 > See [DESIGN.md](DESIGN.md) for the architecture and the build order.
 
 ## Why
@@ -29,15 +29,33 @@ Requires the Rust MSVC toolchain (`rustup default stable-x86_64-pc-windows-msvc`
 and the Visual Studio Build Tools C++ workload for the linker.
 
 ```bash
+cargo run -p argus-session --example watch
+```
+
+Spawns the agent described by `manifests/shell.json`, forwards your typing to
+it, and prints every status transition with the manifest rule responsible:
+
+```text
+[  0.00s] Working   rule=-
+[  3.16s] Idle      rule=powershell-prompt
+[  3.20s] Done      rule=-  exit=0
+```
+
+Pass a different manifest to watch another agent:
+
+```bash
+cargo run -p argus-session --example watch -- manifests/claude-code.json
+```
+
+Earlier checkpoints are still there, one layer at a time. The emulated screen
+alone, redrawn as it changes:
+
+```bash
 cargo run -p argus-terminal-emu --example screen
 ```
 
-Spawns a real shell on a pseudo-console, feeds its output through a headless
-terminal emulator, and redraws the emulated screen whenever it changes. Type
-`exit` to leave.
-
-To see why that emulator is necessary, run the step 1 checkpoint instead — the
-same stream, unparsed:
+And the raw byte stream with no emulator in front of it, which is the clearest
+argument for why the emulator exists:
 
 ```bash
 cargo run -p argus-pty --bin pty-smoke

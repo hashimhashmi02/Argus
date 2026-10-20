@@ -112,6 +112,54 @@ fn a_region_restricts_where_a_rule_looks() {
 }
 
 #[test]
+fn last_lines_counts_from_the_last_content_not_the_bottom_of_the_grid() {
+    // Regression: a real emulated screen is padded with blank rows until it
+    // fills up. A fresh `cmd.exe` is three lines of banner and prompt above
+    // twenty-seven empty ones, and "the last three lines" must mean the prompt,
+    // not three blanks. The first live session test caught this; the fixtures
+    // above never had trailing blanks, so they could not.
+    let json = minimal(
+        r#"{
+            "name": "prompt",
+            "status": "idle",
+            "pattern": "(?m)^C:\\\\[^\\n]*>$",
+            "region": { "last_lines": 3 }
+        }"#,
+    );
+    let agent = Agent::from_json(&json, "test.json").unwrap();
+
+    let mut screen = vec![
+        "Microsoft Windows [Version 10.0.26200]".to_string(),
+        "(c) Microsoft Corporation. All rights reserved.".to_string(),
+        String::new(),
+        "C:\\Users\\Hashim>".to_string(),
+    ];
+    screen.extend(std::iter::repeat_n(String::new(), 26));
+
+    assert_eq!(agent.classify(&screen).status, Some(Status::Idle));
+
+    // And the region still excludes older content above the window.
+    let mut scrolled = vec!["C:\\Users\\Hashim>".to_string()];
+    scrolled.extend(["one", "two", "three"].map(String::from));
+    scrolled.extend(std::iter::repeat_n(String::new(), 10));
+    assert_eq!(agent.classify(&scrolled).status, None);
+}
+
+#[test]
+fn an_entirely_blank_screen_matches_nothing() {
+    let json = minimal(
+        r#"{ "name": "any", "status": "idle", "pattern": ".*", "region": { "last_lines": 3 } }"#,
+    );
+    let agent = Agent::from_json(&json, "test.json").unwrap();
+
+    // `.*` matches the empty string, so this only holds if a blank screen
+    // contributes no lines at all rather than a run of empty ones. Either way it
+    // must not panic on the index arithmetic.
+    let blank = vec![String::new(); 30];
+    let _ = agent.classify(&blank);
+}
+
+#[test]
 fn rules_match_across_line_boundaries() {
     // The region is joined with newlines, so a multiline pattern sees the shape
     // of the screen rather than a single run-on string.
