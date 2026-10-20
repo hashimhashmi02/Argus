@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use argus_control_server::{Server, default_pipe_name};
+use argus_control_server::{Server, default_pipe_name, pipe_path};
 use argus_engine::Engine;
 
 struct Args {
@@ -39,7 +39,7 @@ fn parse_args() -> Result<Args> {
             "--manifests" => {
                 args.manifests = argv.next().context("--manifests needs a directory")?.into();
             }
-            "--pipe" => args.pipe = argv.next().context("--pipe needs a name")?,
+            "--pipe" => args.pipe = pipe_path(&argv.next().context("--pipe needs a name")?),
             "-h" | "--help" => {
                 println!("usage: argus-engine [--manifests DIR] [--pipe NAME]");
                 std::process::exit(0);
