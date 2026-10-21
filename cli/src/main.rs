@@ -122,7 +122,50 @@ fn parse_size(s: &str) -> Result<(u16, u16), String> {
     Ok((cols, rows))
 }
 
+/// How long to wait between typing text and pressing Enter.
+///
+/// Enter has to arrive as its own keystroke. Found by driving a real Claude
+/// Code session: text and `\r` written in one burst are read by the TUI as a
+/// *paste*, and inside a paste Enter is just a newline in the input box -- so the
+/// prompt was typed and never submitted, and sat there for a full minute. A
+/// person never hits this because they press Enter separately; a program has to
+/// do the same. Most modern TUIs detect pastes this way, so this is not a
+/// Claude-specific workaround.
+///
+/// The gap only has to be long enough for the two writes to reach the child as
+/// separate reads. 100ms is far more than that needs and too short for a person
+/// to notice.
+const ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(100);
+
 impl Command {
+    /// The requests this command sends, in order.
+    ///
+    /// Usually one. `send` with text and Enter is two -- see [`ENTER_GAP`].
+    fn into_requests(self) -> Result<Vec<Request>> {
+        if let Command::Send {
+            id,
+            text,
+            key: None,
+            no_enter: false,
+        } = self
+        {
+            return Ok(vec![
+                Request::SendText {
+                    id: id.clone(),
+                    text: text.join(" "),
+                },
+                // `\r`, not `\n`: Enter on a real terminal sends a carriage
+                // return, and a program reading raw input may ignore a line feed
+                // entirely.
+                Request::SendText {
+                    id,
+                    text: "\r".to_string(),
+                },
+            ]);
+        }
+        Ok(vec![self.into_request()?])
+    }
+
     fn into_request(self) -> Result<Request> {
         Ok(match self {
             Command::List => Request::List,
@@ -147,15 +190,11 @@ impl Command {
                         String::from_utf8(argus_manifest::key_bytes(&name))
                             .context("key resolved to bytes that are not valid text")?
                     }
+                    // Text followed by Enter never reaches here; `into_requests`
+                    // splits it into two keystrokes. What is left is text alone.
                     None => {
-                        let mut text = text.join(" ");
-                        if !no_enter {
-                            // `\r`, not `\n`: Enter on a real terminal sends a
-                            // carriage return, and a program reading raw input
-                            // may ignore a line feed entirely.
-                            text.push('\r');
-                        }
-                        text
+                        debug_assert!(no_enter, "text + Enter is handled by into_requests");
+                        text.join(" ")
                     }
                 };
                 Request::SendText { id, text }
@@ -183,11 +222,18 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         .pipe
         .as_deref()
         .map_or_else(default_pipe_name, pipe_path);
-    let request = cli.command.into_request()?;
+    let requests = cli.command.into_requests()?;
 
     let result = async {
         let mut client = Client::connect(&pipe).await?;
-        client.call(request).await
+        let mut reply = Reply::Done;
+        for (i, request) in requests.into_iter().enumerate() {
+            if i > 0 {
+                tokio::time::sleep(ENTER_GAP).await;
+            }
+            reply = client.call(request).await?;
+        }
+        Ok::<Reply, ClientError>(reply)
     }
     .await;
 
