@@ -9,10 +9,10 @@ and which is **done**.
 
 Windows-native, written in Rust, built on [ConPTY](https://devblogs.microsoft.com/commandline/windows-command-line-introducing-the-windows-pseudo-console-conpty/).
 
-> **Status: early.** Step 8a. The engine runs as a daemon, a desktop dashboard
-> and `argus-cli` both drive it, and the session list survives an engine
-> restart. The dashboard shows each agent's screen read-only; a fully
-> interactive terminal is step 8b.
+> **Status: early.** Step 8a. The engine runs as a daemon, a desktop app and
+> `argus-cli` both drive it, and the session list survives an engine restart.
+> The app tiles every agent's screen read-only; a fully interactive terminal is
+> step 8b.
 > See [DESIGN.md](DESIGN.md) for the architecture and the build order.
 
 ## Why
@@ -39,8 +39,23 @@ npm run tauri dev
 
 The first build compiles Tauri and takes a few minutes. If no engine is running,
 the app offers to start one, detached, so closing the window never stops an
-agent. Sessions are listed most-urgent first; select one to see its screen, and
-answer it with **Approve** / **Deny** or by typing a line.
+agent.
+
+The window works like tmux. Every session is a pane showing its real screen,
+and the status line along the bottom flags each one: `!` needs you, `#` working,
+`~` idle. A session that needs you takes the left of the window in yellow.
+
+| Key | Does |
+|---|---|
+| `0`–`9`, arrows | Pick a pane |
+| `Enter` / `Esc` | Zoom the pane to the full window / tile every pane again |
+| `y` / `n` | Approve or deny the pane that needs you |
+| `:` | Type a line into the pane |
+| `c` | Start a new session |
+| `x` | Kill the pane's session, after asking |
+
+Everything also works with the mouse: click a pane or its status-line entry,
+double-click to zoom, and click `y` / `n` in a waiting pane.
 
 ### The demo script
 

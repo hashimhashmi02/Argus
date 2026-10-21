@@ -1,0 +1,313 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-21T19:38:43.033Z",
+  "title": "Design System: Argus",
+  "extensions": {
+    "colorMeta": {
+      "bright-yellow": {
+        "role": "primary",
+        "displayName": "Bell Yellow",
+        "canonical": "#f9f1a5",
+        "oklch": "oklch(94.7% 0.096 102.9)",
+        "tonalRamp": [
+          "oklch(15% 0.096 102.9)",
+          "oklch(26.4% 0.096 102.9)",
+          "oklch(37.9% 0.096 102.9)",
+          "oklch(49.3% 0.096 102.9)",
+          "oklch(60.7% 0.096 102.9)",
+          "oklch(72.1% 0.096 102.9)",
+          "oklch(83.6% 0.096 102.9)",
+          "oklch(95% 0.096 102.9)"
+        ]
+      },
+      "yellow": {
+        "role": "primary",
+        "displayName": "Pressed Yellow",
+        "canonical": "#c19c00",
+        "oklch": "oklch(70.6% 0.144 91.7)",
+        "tonalRamp": [
+          "oklch(15% 0.144 91.7)",
+          "oklch(26.4% 0.144 91.7)",
+          "oklch(37.9% 0.144 91.7)",
+          "oklch(49.3% 0.144 91.7)",
+          "oklch(60.7% 0.144 91.7)",
+          "oklch(72.1% 0.144 91.7)",
+          "oklch(83.6% 0.144 91.7)",
+          "oklch(95% 0.144 91.7)"
+        ]
+      },
+      "green": {
+        "role": "secondary",
+        "displayName": "Active Green",
+        "canonical": "#13a10e",
+        "oklch": "oklch(61.6% 0.204 142.4)",
+        "tonalRamp": [
+          "oklch(15% 0.204 142.4)",
+          "oklch(26.4% 0.204 142.4)",
+          "oklch(37.9% 0.204 142.4)",
+          "oklch(49.3% 0.204 142.4)",
+          "oklch(60.7% 0.204 142.4)",
+          "oklch(72.1% 0.204 142.4)",
+          "oklch(83.6% 0.204 142.4)",
+          "oklch(95% 0.204 142.4)"
+        ]
+      },
+      "cyan": {
+        "role": "secondary",
+        "displayName": "Working Cyan",
+        "canonical": "#3a96dd",
+        "oklch": "oklch(65.1% 0.137 245.6)",
+        "tonalRamp": [
+          "oklch(15% 0.137 245.6)",
+          "oklch(26.4% 0.137 245.6)",
+          "oklch(37.9% 0.137 245.6)",
+          "oklch(49.3% 0.137 245.6)",
+          "oklch(60.7% 0.137 245.6)",
+          "oklch(72.1% 0.137 245.6)",
+          "oklch(83.6% 0.137 245.6)",
+          "oklch(95% 0.137 245.6)"
+        ]
+      },
+      "bright-red": {
+        "role": "tertiary",
+        "displayName": "Exit Red",
+        "canonical": "#e74856",
+        "oklch": "oklch(63% 0.195 19.9)",
+        "tonalRamp": [
+          "oklch(15% 0.195 19.9)",
+          "oklch(26.4% 0.195 19.9)",
+          "oklch(37.9% 0.195 19.9)",
+          "oklch(49.3% 0.195 19.9)",
+          "oklch(60.7% 0.195 19.9)",
+          "oklch(72.1% 0.195 19.9)",
+          "oklch(83.6% 0.195 19.9)",
+          "oklch(95% 0.195 19.9)"
+        ]
+      },
+      "red": {
+        "role": "tertiary",
+        "displayName": "Lost Rule",
+        "canonical": "#c50f1f",
+        "oklch": "oklch(52.3% 0.206 25.8)",
+        "tonalRamp": [
+          "oklch(15% 0.206 25.8)",
+          "oklch(26.4% 0.206 25.8)",
+          "oklch(37.9% 0.206 25.8)",
+          "oklch(49.3% 0.206 25.8)",
+          "oklch(60.7% 0.206 25.8)",
+          "oklch(72.1% 0.206 25.8)",
+          "oklch(83.6% 0.206 25.8)",
+          "oklch(95% 0.206 25.8)"
+        ]
+      },
+      "black": {
+        "role": "neutral",
+        "displayName": "Terminal Black",
+        "canonical": "#0c0c0c",
+        "oklch": "oklch(15.4% 0 0)",
+        "tonalRamp": [
+          "oklch(15% 0 0)",
+          "oklch(26.4% 0 0)",
+          "oklch(37.9% 0 0)",
+          "oklch(49.3% 0 0)",
+          "oklch(60.7% 0 0)",
+          "oklch(72.1% 0 0)",
+          "oklch(83.6% 0 0)",
+          "oklch(95% 0 0)"
+        ]
+      },
+      "white": {
+        "role": "neutral",
+        "displayName": "Terminal White",
+        "canonical": "#cccccc",
+        "oklch": "oklch(84.5% 0 0)",
+        "tonalRamp": [
+          "oklch(15% 0 0)",
+          "oklch(26.4% 0 0)",
+          "oklch(37.9% 0 0)",
+          "oklch(49.3% 0 0)",
+          "oklch(60.7% 0 0)",
+          "oklch(72.1% 0 0)",
+          "oklch(83.6% 0 0)",
+          "oklch(95% 0 0)"
+        ]
+      },
+      "bright-white": {
+        "role": "neutral",
+        "displayName": "Bright White",
+        "canonical": "#f2f2f2",
+        "oklch": "oklch(96.1% 0 0)",
+        "tonalRamp": [
+          "oklch(15% 0 0)",
+          "oklch(26.4% 0 0)",
+          "oklch(37.9% 0 0)",
+          "oklch(49.3% 0 0)",
+          "oklch(60.7% 0 0)",
+          "oklch(72.1% 0 0)",
+          "oklch(83.6% 0 0)",
+          "oklch(95% 0 0)"
+        ]
+      },
+      "bright-black": {
+        "role": "neutral",
+        "displayName": "Rule Grey",
+        "canonical": "#767676",
+        "oklch": "oklch(56.6% 0 0)",
+        "tonalRamp": [
+          "oklch(15% 0 0)",
+          "oklch(26.4% 0 0)",
+          "oklch(37.9% 0 0)",
+          "oklch(49.3% 0 0)",
+          "oklch(60.7% 0 0)",
+          "oklch(72.1% 0 0)",
+          "oklch(83.6% 0 0)",
+          "oklch(95% 0 0)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "chrome": {
+        "displayName": "Chrome",
+        "purpose": "Pane borders, the status line, prompts and notices."
+      },
+      "chrome-strong": {
+        "displayName": "Chrome Strong",
+        "purpose": "The name of a pane that needs you, the bell entry, answer keys."
+      },
+      "screen": {
+        "displayName": "Screen",
+        "purpose": "Agent screens, fitted so the whole grid fits its pane."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "zoom-morph",
+        "value": "180ms cubic-bezier(0.2, 0, 0, 1)",
+        "purpose": "The one authored moment: panes animate box to box on zoom, tile and bell, as a view transition. Skipped under reduced motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "window-minimum",
+        "value": "900x560"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Status Line",
+      "kind": "nav",
+      "refersTo": "status-line",
+      "description": "The one reverse-video row: session, window list with tmux flags, hints, engine, clock.",
+      "html": "<footer class=\"ds-status\"><span class=\"ds-pad\">[argus]</span><button class=\"ds-window\">0:claude-code</button><button class=\"ds-window ds-bell\">1:shell*!</button><button class=\"ds-window\">2:shell#</button><span class=\"ds-fill\"></span><button class=\"ds-window\"><b>enter</b> zoom</button><span class=\"ds-pad\">engine up</span><span class=\"ds-pad\">22:32 21-Oct-26</span></footer>",
+      "css": ".ds-status { display: flex; align-items: center; height: 20px; background: #cccccc; color: #0c0c0c; white-space: nowrap; font-family: \"Argus Mono\", \"Cascadia Mono\", Consolas, monospace; font-size: 13px; line-height: 20px; } .ds-pad { padding: 0 1ch; } .ds-fill { flex: 1; } .ds-window { font: inherit; color: inherit; background: none; border: 0; border-radius: 0; padding: 0 1ch; cursor: pointer; } .ds-window:hover { text-decoration: underline; text-underline-offset: 0.2em; } .ds-window:focus-visible { outline: 1px solid #0c0c0c; outline-offset: -1px; } .ds-bell { background: #0c0c0c; color: #f9f1a5; font-weight: 700; }"
+    },
+    {
+      "name": "Status Line Prompt",
+      "kind": "input",
+      "refersTo": "status-line-prompt",
+      "description": "The status line asking something: tmux's yellow, because here you act.",
+      "html": "<form class=\"ds-prompt\"><label class=\"ds-pad\" for=\"ds-send\">send-keys -t 0:shell</label><input id=\"ds-send\" class=\"ds-input\" placeholder=\"type a line\" /><span class=\"ds-pad\">enter send line · esc cancel</span></form>",
+      "css": ".ds-prompt { display: flex; align-items: center; height: 20px; background: #f9f1a5; color: #0c0c0c; white-space: nowrap; font-family: \"Argus Mono\", \"Cascadia Mono\", Consolas, monospace; font-size: 13px; line-height: 20px; } .ds-pad { padding: 0 1ch; } .ds-input { flex: 1; font: inherit; height: 100%; padding: 0; border: 0; outline: 0; background: transparent; color: #0c0c0c; caret-color: #0c0c0c; } .ds-input::placeholder { color: color-mix(in srgb, #0c0c0c 65%, #f9f1a5); }"
+    },
+    {
+      "name": "Pane Border",
+      "kind": "custom",
+      "refersTo": "pane-border",
+      "description": "Fixed furniture in one line: index and agent, id, status and age, rule.",
+      "html": "<header class=\"ds-head\"><span class=\"ds-tick\"></span><span class=\"ds-seg ds-name\">1 shell</span><span class=\"ds-tick\"></span><span class=\"ds-seg\">35057747</span><span class=\"ds-tick\"></span><span class=\"ds-seg ds-working\">working 3m10s</span><span class=\"ds-tick\"></span><span class=\"ds-seg\">busy</span><span class=\"ds-rule\"></span></header>",
+      "css": ".ds-head { display: flex; align-items: center; height: 20px; background: #0c0c0c; color: #cccccc; white-space: nowrap; font-family: \"Argus Mono\", \"Cascadia Mono\", Consolas, monospace; font-size: 13px; line-height: 20px; } .ds-tick, .ds-rule { border-top: 1px solid #767676; } .ds-tick { width: 1ch; } .ds-rule { flex: 1; } .ds-seg { padding: 0 0.5ch; } .ds-name { color: #f2f2f2; } .ds-working { color: #3a96dd; }"
+    },
+    {
+      "name": "Pane Border, Needs You",
+      "kind": "custom",
+      "refersTo": "pane-border-bell",
+      "description": "The bell pane's border: the whole line becomes a yellow band.",
+      "html": "<header class=\"ds-head\"><span class=\"ds-tick\"></span><span class=\"ds-seg ds-name\">0 shell</span><span class=\"ds-tick\"></span><span class=\"ds-seg\">f9e21914</span><span class=\"ds-tick\"></span><span class=\"ds-seg\">needs you 6s</span><span class=\"ds-tick\"></span><span class=\"ds-seg\">confirm-prompt</span><span class=\"ds-rule\"></span></header>",
+      "css": ".ds-head { display: flex; align-items: center; height: 20px; background: #f9f1a5; color: #0c0c0c; white-space: nowrap; font-family: \"Argus Mono\", \"Cascadia Mono\", Consolas, monospace; font-size: 13px; line-height: 20px; } .ds-tick, .ds-rule { border-top: 1px solid #0c0c0c; } .ds-tick { width: 1ch; } .ds-rule { flex: 1; } .ds-seg { padding: 0 0.5ch; } .ds-name { font-weight: 700; }"
+    },
+    {
+      "name": "Answer Prompt",
+      "kind": "button",
+      "refersTo": "answer-key",
+      "description": "A blocked pane's footer; y and n are black notches in the yellow row.",
+      "html": "<div class=\"ds-answer\"><span>approve?</span><button class=\"ds-key\">y</button><button class=\"ds-key\">n</button></div>",
+      "css": ".ds-answer { display: flex; align-items: center; gap: 1ch; height: 20px; padding: 0 1ch; background: #f9f1a5; color: #0c0c0c; font-family: \"Argus Mono\", \"Cascadia Mono\", Consolas, monospace; font-size: 13px; line-height: 20px; } .ds-key { font: inherit; font-weight: 700; padding: 0 1ch; border: 0; border-radius: 0; background: #0c0c0c; color: #f9f1a5; cursor: pointer; } .ds-key:hover { text-decoration: underline; text-underline-offset: 0.2em; } .ds-key:focus-visible { outline: 1px solid #f2f2f2; outline-offset: -1px; }"
+    },
+    {
+      "name": "Act Button",
+      "kind": "button",
+      "refersTo": "act-button",
+      "description": "The one action on a window with no panes.",
+      "html": "<button class=\"ds-act\"><b>s</b> start the engine</button> <button class=\"ds-act\" disabled><b>s</b> starting the engine</button>",
+      "css": ".ds-act { font-family: \"Argus Mono\", \"Cascadia Mono\", Consolas, monospace; font-size: 13px; line-height: 20px; padding: 0 1ch; border: 0; border-radius: 0; background: #f9f1a5; color: #0c0c0c; cursor: pointer; } .ds-act:disabled { background: #c19c00; cursor: default; } .ds-act:focus-visible { outline: 1px solid #f2f2f2; outline-offset: -1px; }"
+    },
+    {
+      "name": "Key Chips",
+      "kind": "chip",
+      "refersTo": "key-chip",
+      "description": "A zoomed pane's send-keys row, named as tmux names keys.",
+      "html": "<div class=\"ds-keys\"><span class=\"ds-label\">send-keys</span><button class=\"ds-chip\">Enter</button><button class=\"ds-chip\">Escape</button><button class=\"ds-chip\">C-c</button><button class=\"ds-chip\">Up</button><button class=\"ds-chip\">Down</button></div>",
+      "css": ".ds-keys { display: flex; align-items: center; height: 20px; background: #0c0c0c; color: #cccccc; border-top: 1px solid #13a10e; font-family: \"Argus Mono\", \"Cascadia Mono\", Consolas, monospace; font-size: 13px; line-height: 20px; } .ds-label { padding: 0 1ch; } .ds-chip { font: inherit; padding: 0 1ch; border: 0; border-radius: 0; background: none; color: #f2f2f2; cursor: pointer; } .ds-chip:hover { background: #cccccc; color: #0c0c0c; } .ds-chip:focus-visible { outline: 1px solid #f2f2f2; outline-offset: -1px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Multiplexer",
+    "overview": "Argus looks like the tool its users already live in: tmux, drawn in Windows Terminal's own colours and face. Every session is a pane showing its agent's real emulated screen, tiled edge to edge, with a one-row status line at the bottom. There is no app chrome around the panes — no sidebar, no cards, no toolbar. The window is the multiplexer.\n\nThe system is austere on purpose, because the screens are the content and the glance is the job. Colour is almost absent: the terminal's grey on near-black, a green rule for the current pane, cyan for a working status. One colour — bright yellow — is reserved for the places you can act, so that from across the desk a single yellow band says which agent is waiting and nothing else competes with it. Need decides size: a pane that needs you swells into the main tile, and zooming brings one screen to reading size while the chrome stays small.\n\nThe rejected look is the generic SaaS admin dashboard: a session sidebar with status dots beside a detail panel, soft cards, rounded corners and a blue accent. Argus's first draft was that, and it is the anti-reference.",
+    "keyCharacteristics": [
+      "One monospace face for everything, chrome and screen alike.",
+      "Panes separated by 1px rules, never by gaps, shadows or cards.",
+      "A reverse-video status line that turns yellow when it asks you something.",
+      "Bright yellow only where an action is waiting.",
+      "Panes keep their creation order; only the bell moves one."
+    ],
+    "rules": [
+      {
+        "name": "The Bell Rule",
+        "body": "Bright yellow appears only where an action is waiting. If nothing can be pressed or answered, nothing is yellow.",
+        "section": "colors"
+      },
+      {
+        "name": "The Lines-Not-Text Rule",
+        "body": "Rule Grey and Lost Rule draw lines; they never colour text. Text stays at Terminal White or brighter, so every label clears 4.5:1.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Face Rule",
+        "body": "Every glyph in the window is Cascadia Mono. Hierarchy comes from scale (a fitted screen against fixed 13px chrome), weight (700 for what needs you) and colour — never from a second family.",
+        "section": "typography"
+      },
+      {
+        "name": "The Fixed Furniture Rule",
+        "body": "A pane border always reads `─ index agent ─ id ─ status age ─ rule ───`, in that order, with `-` for a missing rule. The eye learns one position per fact.",
+        "section": "typography"
+      },
+      {
+        "name": "The Stable Panes Rule",
+        "body": "Panes keep their creation order and index. Only a bell moves a pane, and only into the main tile.",
+        "section": "layout"
+      },
+      {
+        "name": "The No-Shadow Rule",
+        "body": "Nothing casts a shadow, glows, or floats. If something needs to stand out, it gets the bell's colour or the main tile's size.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do keep Bright Yellow for actions that are waiting: the bell pane's border band and footer, prompts, the one button on an empty window.",
+      "Do separate panes with 1px rules — the column gap and each pane's top border — and nothing else.",
+      "Do spell keys as tmux names them (`enter`, `esc`, `C-c`, `up/down`) in hints and key rows.",
+      "Do keep every chrome row one 20px line of 13px Cascadia Mono.",
+      "Do keep only screen text selectable; chrome is `user-select: none`.",
+      "Do mark finished panes in place — dashed border, `dead, status N` or `lost` — rather than removing them."
+    ],
+    "donts": [
+      "Don't add a sidebar, cards, rounded corners, shadows or glows; the generic SaaS admin dashboard is the anti-reference.",
+      "Don't reorder panes by urgency; the bell moves one pane into the main tile and nothing else moves.",
+      "Don't set text in Rule Grey or Lost Rule; they are line colours.",
+      "Don't introduce a second typeface or a display size; hierarchy is fitted screen against fixed chrome.",
+      "Don't use Unicode symbols as icons for keys or actions."
+    ]
+  }
+}
