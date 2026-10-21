@@ -9,9 +9,10 @@ and which is **done**.
 
 Windows-native, written in Rust, built on [ConPTY](https://devblogs.microsoft.com/commandline/windows-command-line-introducing-the-windows-pseudo-console-conpty/).
 
-> **Status: early.** Step 7 of 8. The engine runs as a daemon, `argus-cli`
-> drives it end to end, and the session list survives an engine restart. There
-> is no UI yet (step 8).
+> **Status: early.** Step 8a. The engine runs as a daemon, a desktop dashboard
+> and `argus-cli` both drive it, and the session list survives an engine
+> restart. The dashboard shows each agent's screen read-only; a fully
+> interactive terminal is step 8b.
 > See [DESIGN.md](DESIGN.md) for the architecture and the build order.
 
 ## Why
@@ -28,7 +29,22 @@ the Argus window never kills a running agent.
 Requires the Rust MSVC toolchain (`rustup default stable-x86_64-pc-windows-msvc`)
 and the Visual Studio Build Tools C++ workload for the linker.
 
-The quickest way to see it is the narrated demo. It builds everything, runs a
+### The desktop app
+
+```powershell
+cd app
+npm install
+npm run tauri dev
+```
+
+The first build compiles Tauri and takes a few minutes. If no engine is running,
+the app offers to start one, detached, so closing the window never stops an
+agent. Sessions are listed most-urgent first; select one to see its screen, and
+answer it with **Approve** / **Deny** or by typing a line.
+
+### The demo script
+
+The quickest way to see the engine on its own is the narrated demo. It builds everything, runs a
 private engine against a scratch state file, and walks through three shells at
 once, answering a blocked one from the CLI, and surviving a crash:
 
