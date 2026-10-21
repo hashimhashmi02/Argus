@@ -29,4 +29,11 @@ export default defineConfig(() => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+
+  build: {
+    // The bundle is loaded from disk by the app, never over a network, so
+    // splitting xterm.js into its own chunk would buy nothing. The default
+    // 500 kB warning is about download time this app does not have.
+    chunkSizeWarningLimit: 1024,
+  },
 }));

@@ -23,6 +23,9 @@ argus-manifest = { path = "../../crates/manifest" }
 argus-protocol = { path = "../../crates/protocol" }
 anyhow.workspace = true
 serde.workspace = true
+# Watch events reach the webview as JSON values, so one more -- "disconnected"
+# -- can be added beside the engine's own.
+serde_json.workspace = true
 tauri = { version = "2", features = [] }
 # Only for bounding every engine call with a timeout. Tauri already runs on
 # tokio; this just makes the timer available.

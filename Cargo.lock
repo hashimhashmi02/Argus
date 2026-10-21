@@ -130,6 +130,7 @@ dependencies = [
  "argus-manifest",
  "argus-protocol",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tokio",
