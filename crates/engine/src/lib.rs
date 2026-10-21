@@ -11,16 +11,31 @@
 //! way.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use argus_control_server::Handler;
 use argus_manifest::Agent;
 use argus_protocol::{ErrorCode, Reply, Request, Response, RpcError, ScreenView, SessionInfo};
 use argus_reducer::Timestamp;
-use argus_registry::{Entry, LookupError, Registry};
+use argus_registry::{Entry, LookupError, Registry, now_unix_ms};
 use argus_session::{Session, SessionConfig, SessionHandle};
+use tokio::sync::Notify;
+
+mod persistence;
+
+use persistence::Persistence;
+pub use persistence::{StartupReport, default_state_path};
+
+/// How often the persister checks for changes when nothing has prompted it.
+///
+/// Status changes happen inside session tasks the engine is not told about, so
+/// they are picked up by this tick. A second is short enough that a crash loses
+/// very little, and cheap because an unchanged registry is not rewritten.
+const PERSIST_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Every agent the engine can launch, and every session it has launched.
 pub struct Engine {
@@ -28,6 +43,11 @@ pub struct Engine {
     /// a stable order.
     agents: BTreeMap<String, Arc<Agent>>,
     registry: Registry<SessionHandle>,
+    /// `None` for an in-memory engine, as the tests mostly use.
+    persistence: Option<Persistence>,
+    /// Poked whenever the registry changes shape, so a new session reaches the
+    /// disk immediately rather than at the next tick.
+    dirty: Notify,
 }
 
 impl Engine {
@@ -46,7 +66,83 @@ impl Engine {
         Ok(Self {
             agents: by_id,
             registry: Registry::new(),
+            persistence: None,
+            dirty: Notify::new(),
         })
+    }
+
+    /// Remember sessions in `path`, restoring whatever it holds from a previous
+    /// run.
+    ///
+    /// Sessions that were still running when the previous engine stopped come
+    /// back as finished and lost: their processes went down with it. An
+    /// unparseable file is quarantined rather than overwritten, and the report
+    /// says where it went. An *unreadable* file is an error -- the engine
+    /// refuses to start rather than risk writing over history it could not see.
+    ///
+    /// Writes the restored state straight back, so the file reflects "lost"
+    /// even if this engine is itself killed before its first tick.
+    pub fn with_state_file(mut self, path: &Path) -> Result<(Self, StartupReport)> {
+        let (persistence, records, report) = Persistence::open(path)
+            .with_context(|| format!("could not read the state file {}", path.display()))?;
+
+        self.registry.restore(records);
+        persistence
+            .save_if_changed(&self.registry.list())
+            .with_context(|| format!("could not write the state file {}", path.display()))?;
+
+        self.persistence = Some(persistence);
+        Ok((self, report))
+    }
+
+    /// Where this engine remembers sessions, if it does.
+    pub fn state_path(&self) -> Option<&Path> {
+        self.persistence.as_ref().map(Persistence::path)
+    }
+
+    /// Write the registry to the state file if anything changed.
+    ///
+    /// Blocking I/O, so it runs on the blocking pool rather than a runtime
+    /// worker. Returns whether a write happened.
+    pub async fn save(self: &Arc<Self>) -> Result<bool> {
+        let engine = Arc::clone(self);
+        tokio::task::spawn_blocking(move || match &engine.persistence {
+            Some(p) => p.save_if_changed(&engine.registry.list()),
+            None => Ok(false),
+        })
+        .await
+        .context("state save panicked")?
+        .context("could not save the state file")
+    }
+
+    /// Keep the state file up to date until `shutdown` completes, then save one
+    /// last time.
+    ///
+    /// Wakes on every new session and once a second regardless. A failed save
+    /// is reported and retried on the next wake rather than stopping the engine:
+    /// a full disk should not take running agents down with it.
+    pub async fn run_persister(self: Arc<Self>, shutdown: impl Future<Output = ()>) {
+        if self.persistence.is_none() {
+            return;
+        }
+        tokio::pin!(shutdown);
+        let mut tick = tokio::time::interval(PERSIST_INTERVAL);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        loop {
+            tokio::select! {
+                () = &mut shutdown => break,
+                () = self.dirty.notified() => {}
+                _ = tick.tick() => {}
+            }
+            if let Err(error) = self.save().await {
+                eprintln!("[argus-engine] warning: {error:#}");
+            }
+        }
+
+        if let Err(error) = self.save().await {
+            eprintln!("[argus-engine] warning: final save failed: {error:#}");
+        }
     }
 
     /// Load every `*.json` manifest in a directory.
@@ -97,31 +193,50 @@ impl Engine {
 
             Request::SendText { id, text } => {
                 let entry = self.find(&id)?;
-                if !entry.handle.send_text(&text).await {
-                    // Typing into a session that has already ended is almost
-                    // always a mistake worth telling the user about -- they
-                    // think they are talking to something that is not there.
-                    return Err(finished(&entry));
+                // Typing into a session that has already ended is almost always
+                // a mistake worth telling the user about -- they think they are
+                // talking to something that is not there. A session restored
+                // from a previous run has no handle at all, and is the same case.
+                match &entry.handle {
+                    Some(handle) if handle.send_text(&text).await => Ok(Reply::Done),
+                    _ => Err(finished(&entry)),
                 }
-                Ok(Reply::Done)
             }
 
             Request::Resize { id, cols, rows } => {
                 let entry = self.find(&id)?;
-                if !entry.handle.resize(cols, rows).await {
-                    return Err(finished(&entry));
+                match &entry.handle {
+                    Some(handle) if handle.resize(cols, rows).await => Ok(Reply::Done),
+                    _ => Err(finished(&entry)),
                 }
-                Ok(Reply::Done)
             }
 
             Request::ReadScreen { id } => {
                 let entry = self.find(&id)?;
-                let snapshot = entry.handle.snapshot();
+                let session = info(&entry);
+                let Some(handle) = &entry.handle else {
+                    // Screens are not persisted -- they would be most of the
+                    // state file and stale by definition -- so a session from a
+                    // previous run has none to show. An empty screen rather than
+                    // an error, so `screen` on any listed id still says what
+                    // happened to the session in its header.
+                    return Ok(Reply::Screen {
+                        screen: ScreenView {
+                            session,
+                            cols: 0,
+                            rows: 0,
+                            cursor_row: 0,
+                            cursor_col: 0,
+                            lines: Vec::new(),
+                        },
+                    });
+                };
+                let snapshot = handle.snapshot();
                 let (cols, rows) = snapshot.screen.size();
                 let (cursor_row, cursor_col) = snapshot.screen.cursor();
                 Ok(Reply::Screen {
                     screen: ScreenView {
-                        session: info(&entry),
+                        session,
                         cols,
                         rows,
                         cursor_row,
@@ -133,11 +248,14 @@ impl Engine {
 
             Request::Kill { id } => {
                 let entry = self.find(&id)?;
-                // Idempotent: killing something already dead succeeds. The
+                // Idempotent: killing something already dead -- or restored
+                // from a previous run, which is the same thing -- succeeds. The
                 // caller wanted it stopped, and it is. Making a script check
-                // status before every kill to avoid a spurious error would just
-                // move a race from here into every caller.
-                let _ = entry.handle.kill().await;
+                // status before every kill would just move a race from here into
+                // every caller.
+                if let Some(handle) = &entry.handle {
+                    let _ = handle.kill().await;
+                }
                 Ok(Reply::Done)
             }
         }
@@ -184,6 +302,10 @@ impl Engine {
         // its task owns everything it needs. The registry keeps a handle, which
         // is all anything will ever need to reach it.
         let id = self.registry.insert(agent_id, cwd, session.handle());
+        // Persist the new session now rather than at the next tick: a spawn is
+        // the one change a person would be surprised to see missing after a
+        // crash.
+        self.dirty.notify_one();
         let entry = self.find(&id)?;
         Ok(Reply::Session {
             session: info(&entry),
@@ -209,20 +331,64 @@ impl Handler for Engine {
 }
 
 fn info(entry: &Entry<SessionHandle>) -> SessionInfo {
-    let snapshot = entry.handle.snapshot();
-    SessionInfo {
-        id: entry.id.clone(),
-        agent: entry.agent.clone(),
-        status: snapshot.status,
-        since_ms: snapshot.since.saturating_since(Timestamp::ZERO).as_millis() as u64,
-        status_for_ms: entry.handle.status_age().as_millis() as u64,
-        rule: snapshot.rule,
-        pid: snapshot.pid,
-        exit_code: snapshot.exit_code,
+    match (&entry.handle, &entry.restored) {
+        (Some(handle), _) => {
+            let snapshot = handle.snapshot();
+            SessionInfo {
+                id: entry.id.clone(),
+                agent: entry.agent.clone(),
+                status: snapshot.status,
+                since_ms: snapshot.since.saturating_since(Timestamp::ZERO).as_millis() as u64,
+                status_for_ms: handle.status_age().as_millis() as u64,
+                rule: snapshot.rule,
+                pid: snapshot.pid,
+                exit_code: snapshot.exit_code,
+                lost: false,
+            }
+        }
+        (None, Some(record)) => SessionInfo {
+            id: entry.id.clone(),
+            agent: entry.agent.clone(),
+            status: record.status,
+            since_ms: record
+                .status_since_unix_ms
+                .saturating_sub(record.created_unix_ms),
+            // Wall clock on both sides, because the monotonic clock the live
+            // path uses did not survive the restart.
+            status_for_ms: now_unix_ms().saturating_sub(record.status_since_unix_ms),
+            rule: record.rule.clone(),
+            pid: None,
+            exit_code: record.exit_code,
+            lost: record.lost,
+        },
+        // The registry only ever creates entries one way or the other. If that
+        // changes, an honest "done, unknown" is a better answer than a panic in
+        // the middle of serving a request.
+        (None, None) => SessionInfo {
+            id: entry.id.clone(),
+            agent: entry.agent.clone(),
+            status: argus_reducer::Status::Done,
+            since_ms: 0,
+            status_for_ms: 0,
+            rule: None,
+            pid: None,
+            exit_code: None,
+            lost: true,
+        },
     }
 }
 
 fn finished(entry: &Entry<SessionHandle>) -> RpcError {
+    // "Finished" would be exactly the claim `lost` exists to avoid making.
+    if entry.restored.as_ref().is_some_and(|r| r.lost) {
+        return RpcError::new(
+            ErrorCode::SessionFinished,
+            format!(
+                "session {} was lost when the previous engine stopped; spawn a new one",
+                entry.id
+            ),
+        );
+    }
     RpcError::new(
         ErrorCode::SessionFinished,
         format!("session {} has already finished", entry.id),

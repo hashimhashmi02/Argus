@@ -24,6 +24,7 @@ fn session() -> SessionInfo {
         rule: Some("permission-prompt".into()),
         pid: Some(4242),
         exit_code: None,
+        lost: false,
     }
 }
 

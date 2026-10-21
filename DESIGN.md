@@ -383,6 +383,58 @@ empty one matches nothing rather than everything. Ids mix the clock and process
 id with a counter so they do not repeat across engine restarts, which matters
 once step 7 persists them.
 
+### Surviving a restart
+
+The engine remembers its sessions in `%LOCALAPPDATA%\Argus\state.json` and
+restores them on startup. **The list survives a restart; the sessions do not.**
+
+That second half was checked, not assumed. When the engine dies — even from a
+hard kill with no chance to clean up — its pseudo-consoles close and every child
+process goes with them. So a session that was working when the engine stopped is
+not paused somewhere waiting to be reattached; it is gone. It comes back listed as
+**`lost`**, not `done`: "done" would claim it finished. `lost` is a separate flag
+on the wire, not a fifth `Status`, because `Status` is the reducer's judgement of
+a *live* session, and no live session is ever lost.
+
+What the file stores is only what still means something once the engine is gone.
+There is no pid, because a reused pid would point at a stranger. There is no
+screen, because it would be most of the file and stale by definition. Times are
+wall-clock Unix milliseconds — the one place Argus uses the wall clock — because
+they must mean the same thing to a different process on a different day.
+
+Rules the state file enforces, each with a test against a real file:
+
+- **Unparseable: quarantine.** The file is renamed to `state.corrupt-<ms>.json`
+  and the engine starts empty. Quarantine names are timestamped so a second
+  corruption keeps the first one's evidence. If even the rename fails, the engine
+  refuses to start rather than continue toward an overwrite.
+- **Unreadable: error.** A file locked by another process says nothing about its
+  contents. Quarantining it would lose history by a different route.
+- **Unknown fields survive.** Every persisted struct carries a flattened map of
+  fields this build does not understand, written back unchanged.
+- **Writes are atomic.** The engine writes a temp file, calls `sync_all`, then
+  renames it over the old one. A crash mid-save leaves the old file or the new
+  one, never a corrupt file Argus made itself.
+- **Unchanged means unwritten.** The persister wakes every second, so a status's
+  start time is stored as creation time plus a fixed offset. "Now minus time in
+  status" would drift by a millisecond per call, and an idle engine would rewrite
+  the file forever.
+
+Two orderings protect the file from a second engine, which would otherwise read
+the first engine's *live* sessions, decide they were lost in a crash, and write
+that down:
+
+1. The pipe is bound before the state file is read, so a second engine on the
+   same pipe fails before it looks.
+2. The engine holds `state.json.lock` open with no sharing for its whole life.
+   Windows enforces share modes in the kernel and releases them when a process
+   dies, so a crash never leaves a stale lock behind.
+
+**Not done: resuming lost sessions.** Some agents can reattach to previous work
+(`claude --continue`), and manifests already carry `resume.args`. Relaunching a
+lost session through it is the natural next step, but it was a stretch goal for
+step 7 and is left for later.
+
 ## Hardening rules
 
 These are not hypothetical. They come from the bug history of Zeus and from the
@@ -406,7 +458,8 @@ failure modes of the primitives involved.
    `#[serde(deny_unknown_fields)]`. A file that fails to parse is **quarantined**
    (renamed aside), never treated as empty and overwritten; silently starting
    fresh on a parse error destroys the session history of the user at exactly the
-   moment they need it most.
+   moment they need it most. Implemented in step 7 — see
+   [Surviving a restart](#surviving-a-restart).
 
 4. **Spawned agents do not inherit the identity of Argus.** Environment variables
    are scrubbed by prefix before spawn, so credentials and identity meant for the
@@ -425,8 +478,8 @@ Each step is a working, runnable checkpoint — not a half-finished layer.
 | 4 | `session`: steps 1-3 on a `tokio` task, exposing status/send/resize/kill | **done** |
 | 5 | `protocol` + `control-server`: RPC types and a named pipe server | **done** |
 | 6 | `cli`: spawn / list / screen / kill against the running engine | **done** |
-| 7 | `registry` persistence: the session list survives an engine restart | next |
-| 8 | `app/`: the Tauri UI, only once the protocol is stable | |
+| 7 | `registry` persistence: the session list survives an engine restart | **done** |
+| 8 | `app/`: the Tauri UI, only once the protocol is stable | next |
 
 The UI is last on purpose. A UI built on an unstable protocol locks in the
 mistakes of that protocol.

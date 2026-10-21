@@ -11,4 +11,11 @@ authors.workspace = true
 # handle it stores, which keeps it below the session layer in the dependency
 # graph and testable without spawning anything.
 [dependencies]
+argus-reducer = { path = "../reducer", features = ["serde"] }
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+argus-reducer = { path = "../reducer", features = ["serde"] }
+serde_json.workspace = true

@@ -9,9 +9,9 @@ and which is **done**.
 
 Windows-native, written in Rust, built on [ConPTY](https://devblogs.microsoft.com/commandline/windows-command-line-introducing-the-windows-pseudo-console-conpty/).
 
-> **Status: early.** Step 6 of 8. The engine runs as a daemon and `argus-cli`
-> drives it end to end. Sessions do not yet survive an engine restart (step 7),
-> and there is no UI.
+> **Status: early.** Step 7 of 8. The engine runs as a daemon, `argus-cli`
+> drives it end to end, and the session list survives an engine restart. There
+> is no UI yet (step 8).
 > See [DESIGN.md](DESIGN.md) for the architecture and the build order.
 
 ## Why
@@ -65,6 +65,19 @@ ids accepted by any unique prefix:
 Add `--json` to any command for the engine's raw reply. Exit codes are 0 for
 success, 1 if the engine refused, 2 for bad usage, and 3 if no engine is
 running.
+
+The engine remembers its sessions in `%LOCALAPPDATA%\Argus\state.json`, so the
+list is still there after a restart. The sessions themselves stop with the
+engine, so any that were still running come back as `lost`:
+
+```text
+ID        AGENT  STATUS    FOR  PID  RULE
+00efdcf5  shell  done (0)  4s   -    -
+b90097bc  shell  lost      0s   -    -
+```
+
+If the state file is ever unreadable, it is moved aside — never overwritten — and
+the engine says where it went.
 
 The protocol underneath is plain length-prefixed JSON, so anything that can open
 a named pipe can drive the engine; see
