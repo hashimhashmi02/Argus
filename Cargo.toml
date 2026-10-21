@@ -14,6 +14,7 @@ members = [
     "crates/protocol",
     "crates/control-server",
     "cli",
+    "app/src-tauri",
 ]
 
 # Metadata every member inherits via `field.workspace = true`, so bumping the
