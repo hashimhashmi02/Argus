@@ -171,6 +171,7 @@ dependencies = [
  "argus-reducer",
  "argus-registry",
  "argus-session",
+ "argus-terminal-emu",
  "serde_json",
  "tokio",
 ]

@@ -8,10 +8,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use argus_control_server::{Client, ClientError, Server, unique_pipe_name};
+use argus_control_server::{Client, ClientError, Server, Watcher, unique_pipe_name};
 use argus_engine::Engine;
 use argus_manifest::Agent;
-use argus_protocol::{ErrorCode, Reply, Request, ScreenView, SessionInfo, Status};
+use argus_protocol::{ErrorCode, Reply, Request, ScreenView, SessionInfo, Status, WatchEvent};
+use argus_terminal_emu::TerminalEmulator;
 use tokio::sync::oneshot;
 
 const LIMIT: Duration = Duration::from_secs(20);
@@ -441,6 +442,129 @@ async fn respond_sends_the_keys_from_the_agents_own_manifest() {
     );
 
     client.call(Request::Kill { id }).await.unwrap();
+}
+
+/// The next watch event, failing the test rather than hanging.
+async fn next_event(watcher: &mut Watcher, what: &str) -> Option<WatchEvent> {
+    tokio::time::timeout(LIMIT, watcher.next())
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_watcher_sees_the_terminal_and_typing_from_another_connection() {
+    // The shape the UI uses: one connection watching, others typing.
+    let engine = start("watch-live");
+    let mut client = Client::connect(&engine.pipe).await.unwrap();
+    let session = spawn_shell(&mut client).await;
+    poll_until(&mut client, &session.id, "the prompt", |v| {
+        v.session.status == Status::Idle
+    })
+    .await;
+
+    let mut watcher = Client::connect(&engine.pipe)
+        .await
+        .unwrap()
+        .watch(&session.id)
+        .await
+        .unwrap();
+    let mut terminal = match next_event(&mut watcher, "the repaint").await {
+        Some(WatchEvent::Repaint { cols, rows, data }) => {
+            let mut terminal = TerminalEmulator::new(cols, rows);
+            let _ = terminal.advance(data.as_bytes());
+            terminal
+        }
+        other => panic!("a watch must start with a repaint, got {other:?}"),
+    };
+    assert!(
+        terminal.screen().text().contains('>'),
+        "the prompt is drawn"
+    );
+
+    client
+        .call(Request::SendText {
+            id: session.id.clone(),
+            text: "echo watched-%OS%\r".into(),
+        })
+        .await
+        .unwrap();
+    while !terminal.screen().text().contains("watched-Windows_NT") {
+        match next_event(&mut watcher, "the command's output").await {
+            Some(WatchEvent::Output { data }) => {
+                let _ = terminal.advance(data.as_bytes());
+            }
+            other => panic!("expected output, got {other:?}"),
+        }
+    }
+
+    client
+        .call(Request::Kill {
+            id: session.id.clone(),
+        })
+        .await
+        .unwrap();
+    loop {
+        match next_event(&mut watcher, "the end of the stream").await {
+            Some(WatchEvent::Output { .. } | WatchEvent::Repaint { .. }) => continue,
+            Some(WatchEvent::Ended) => break,
+            None => panic!("the stream closed without saying the session ended"),
+        }
+    }
+    assert_eq!(next_event(&mut watcher, "the hang-up").await, None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watching_a_finished_session_shows_its_last_screen_and_ends() {
+    let engine = start("watch-finished");
+    let mut client = Client::connect(&engine.pipe).await.unwrap();
+    let session = spawn_shell(&mut client).await;
+    poll_until(&mut client, &session.id, "the prompt", |v| {
+        v.session.status == Status::Idle
+    })
+    .await;
+    client
+        .call(Request::SendText {
+            id: session.id.clone(),
+            text: "echo last-words&exit\r".into(),
+        })
+        .await
+        .unwrap();
+    poll_until(&mut client, &session.id, "the session to end", |v| {
+        v.session.status == Status::Done
+    })
+    .await;
+
+    let mut watcher = Client::connect(&engine.pipe)
+        .await
+        .unwrap()
+        .watch(&session.id)
+        .await
+        .unwrap();
+    match next_event(&mut watcher, "the last screen").await {
+        Some(WatchEvent::Repaint { data, .. }) => assert!(data.contains("last-words")),
+        other => panic!("expected the last screen, got {other:?}"),
+    }
+    assert_eq!(
+        next_event(&mut watcher, "the end").await,
+        Some(WatchEvent::Ended)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watching_an_unknown_session_is_an_unknown_session_error() {
+    let engine = start("watch-missing");
+    let error = Client::connect(&engine.pipe)
+        .await
+        .unwrap()
+        .watch("deadbeef")
+        .await
+        .err()
+        .expect("nothing to watch");
+    match error {
+        ClientError::Rpc(rpc) => assert_eq!(rpc.code, ErrorCode::UnknownSession),
+        other => panic!("expected an rpc error, got {other:?}"),
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -20,12 +20,13 @@ use anyhow::{Context, Result, bail};
 use argus_control_server::Handler;
 use argus_manifest::Agent;
 use argus_protocol::{
-    AgentInfo, ErrorCode, Reply, Request, Response, RpcError, ScreenView, SessionInfo,
+    AgentInfo, ErrorCode, Reply, Request, Response, RpcError, ScreenView, SessionInfo, WatchEvent,
 };
 use argus_reducer::Timestamp;
 use argus_registry::{Entry, LookupError, Registry, now_unix_ms};
-use argus_session::{Session, SessionConfig, SessionHandle};
-use tokio::sync::Notify;
+use argus_session::{Repaint, Session, SessionConfig, SessionHandle, StreamItem, Watch};
+use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::{Notify, mpsc};
 
 mod persistence;
 
@@ -38,6 +39,14 @@ pub use persistence::{StartupReport, default_state_path};
 /// they are picked up by this tick. A second is short enough that a crash loses
 /// very little, and cheap because an unchanged registry is not rewritten.
 const PERSIST_INTERVAL: Duration = Duration::from_secs(1);
+
+/// How many watch events may wait for a slow client before the engine stops
+/// reading the session's stream for it.
+///
+/// Small, because waiting here is how back-pressure reaches the session's
+/// broadcast: a client that cannot keep up falls behind there, gets a fresh
+/// repaint, and skips the backlog instead of replaying it.
+const WATCH_DEPTH: usize = 64;
 
 /// Every agent the engine can launch, and every session it has launched.
 pub struct Engine {
@@ -373,6 +382,79 @@ impl Engine {
 impl Handler for Engine {
     async fn handle(&self, request: Request) -> Response {
         self.dispatch(request).await.into()
+    }
+
+    async fn watch(&self, id: String) -> Result<mpsc::Receiver<WatchEvent>, RpcError> {
+        let entry = self.find(&id)?;
+        // A session from a previous run has no terminal left to follow; say so
+        // rather than streaming an empty screen.
+        let handle = entry.handle.clone().ok_or_else(|| finished(&entry))?;
+        let (events, receiver) = mpsc::channel(WATCH_DEPTH);
+        tokio::spawn(forward_watch(handle, events));
+        Ok(receiver)
+    }
+}
+
+/// Pass a session's terminal on to one watching client, until either the
+/// session ends or the client goes.
+async fn forward_watch(handle: SessionHandle, events: mpsc::Sender<WatchEvent>) {
+    loop {
+        let Some(Watch {
+            repaint,
+            mut stream,
+        }) = handle.watch().await
+        else {
+            // Finished before (or while) being watched. Its last screen
+            // survives as text, which is worth showing before saying so.
+            let screen = handle.snapshot().screen;
+            let (cols, rows) = screen.size();
+            let last = WatchEvent::Repaint {
+                cols,
+                rows,
+                data: screen.repaint(),
+            };
+            if events.send(last).await.is_ok() {
+                let _ = events.send(WatchEvent::Ended).await;
+            }
+            return;
+        };
+
+        if events.send(repaint_event(repaint)).await.is_err() {
+            return;
+        }
+
+        loop {
+            // Also waiting on the client, so one that leaves while the session
+            // is quiet releases its subscription now, not at the next output.
+            let item = tokio::select! {
+                item = stream.recv() => item,
+                () = events.closed() => return,
+            };
+            let event = match item {
+                Ok(StreamItem::Output(data)) => WatchEvent::Output {
+                    data: data.to_string(),
+                },
+                Ok(StreamItem::Repaint(repaint)) => repaint_event(repaint),
+                // Too far behind: the output it missed is gone. Watching again
+                // starts it from a fresh repaint, which is what it needs anyway.
+                Err(RecvError::Lagged(_)) => break,
+                Err(RecvError::Closed) => {
+                    let _ = events.send(WatchEvent::Ended).await;
+                    return;
+                }
+            };
+            if events.send(event).await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
+fn repaint_event(repaint: Repaint) -> WatchEvent {
+    WatchEvent::Repaint {
+        cols: repaint.cols,
+        rows: repaint.rows,
+        data: repaint.data.to_string(),
     }
 }
 
