@@ -457,6 +457,17 @@ that hardcoded "press Enter" would be right for one agent and wrong for the rest
 request that never returned stalled a poller permanently — the list froze on
 "no sessions" while the CLI listed four.
 
+**The window is a terminal multiplexer, not a dashboard.** Every session is a
+pane showing its real emulated screen, tiled tmux-style, with a status line
+flagging each one (`!` needs you, `#` working, `~` idle). A session that needs
+you takes the left 60% of the window; Enter zooms a pane to full size, `y` or `n`
+answers it, Esc tiles back. Panes keep their creation order, so nothing moves
+under your eye except the one that rang. The first version was a session list
+beside one selected screen, which meant reading a list to find the blocked
+agent; tiling every screen means the screen itself is what you glance at. The
+visual system — palette, type, the rule that yellow appears only where you can
+act — is recorded in [app/DESIGN.md](app/DESIGN.md).
+
 ### Starting the engine: Job objects
 
 When the engine is not running, the UI starts it detached. The first attempt
@@ -524,7 +535,7 @@ Each step is a working, runnable checkpoint — not a half-finished layer.
 | 5 | `protocol` + `control-server`: RPC types and a named pipe server | **done** |
 | 6 | `cli`: spawn / list / screen / kill against the running engine | **done** |
 | 7 | `registry` persistence: the session list survives an engine restart | **done** |
-| 8a | `app/`: Tauri dashboard — list, live screen, approve/deny, spawn, kill | **done** |
+| 8a | `app/`: Tauri UI — every screen tiled live, approve/deny, spawn, kill | **done** |
 | 8b | `app/`: interactive terminal (xterm.js), needs a streaming `watch` RPC | next |
 
 The UI is last on purpose. A UI built on an unstable protocol locks in the

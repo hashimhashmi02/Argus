@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 
+# Impeccable's working files: the decision-page server and review captures.
+# PRODUCT.md, DESIGN.md, the surface brief and design.json are kept.
+.impeccable/questions/
+.impeccable/review/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

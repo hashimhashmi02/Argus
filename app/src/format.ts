@@ -31,12 +31,43 @@ export function statusClass(s: SessionInfo): string {
   return s.status === "done" && s.lost ? "lost" : s.status;
 }
 
+/**
+ * The window flag in the status line, borrowed from tmux: `!` is a bell (it
+ * needs you), `#` is activity (working), `~` is silence (idle). A finished
+ * session carries none -- its pane border says how it ended.
+ */
+export function flag(s: SessionInfo): string {
+  switch (s.status) {
+    case "needs_you":
+      return "!";
+    case "working":
+      return "#";
+    case "idle":
+      return "~";
+    case "done":
+      return "";
+  }
+}
+
+/**
+ * The status as a pane border spells it. A finished pane uses tmux's own word
+ * for one whose process has gone: it is dead, with the exit status.
+ */
+export function paneStatus(s: SessionInfo): string {
+  if (s.status === "done") {
+    if (s.lost) return "lost";
+    return s.exit_code === undefined ? "dead" : `dead, status ${s.exit_code}`;
+  }
+  return `${statusLabel(s).toLowerCase()} ${duration(s.status_for_ms)}`;
+}
+
 const RANK: Record<Status, number> = { needs_you: 0, working: 1, idle: 2, done: 3 };
 
 /**
  * Most urgent first: blocked sessions at the top, the longest-waiting first,
- * then working, idle, finished. The list exists to answer "which one should I
- * look at", so it is ordered by that question rather than by creation.
+ * then working, idle, finished. Used to pick which blocked pane takes the main
+ * tile; the panes themselves keep their creation order, so nothing moves under
+ * your eye except the one that rang.
  */
 export function byUrgency(sessions: SessionInfo[]): SessionInfo[] {
   return [...sessions].sort(
