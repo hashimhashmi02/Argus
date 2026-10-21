@@ -284,6 +284,14 @@ impl Engine {
                 }
             }
 
+            // The server routes a watch to `Handler::watch`, because its answer
+            // is a stream rather than one reply. Reaching here means something
+            // called `handle` with it directly.
+            Request::Watch { .. } => Err(RpcError::new(
+                ErrorCode::BadRequest,
+                "`watch` is answered as a stream, on a connection of its own",
+            )),
+
             Request::Kill { id } => {
                 let entry = self.find(&id)?;
                 // Idempotent: killing something already dead -- or restored

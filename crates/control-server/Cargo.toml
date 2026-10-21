@@ -9,6 +9,8 @@ authors.workspace = true
 
 [dependencies]
 argus-protocol = { path = "../protocol" }
+# Only for the `Serialize` / `DeserializeOwned` bounds on generic frame helpers.
+serde.workspace = true
 thiserror.workspace = true
 # "net" carries tokio's Windows named pipes. "io-util" for read/write on them,
 # "time" for the client's busy-pipe retry, "macros" for `select!`.

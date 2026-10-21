@@ -11,10 +11,11 @@ use std::time::Duration;
 use argus_control_server::{Client, ClientError, Handler, Server, unique_pipe_name};
 use argus_protocol::{
     ErrorCode, PROTOCOL_VERSION, Reply, Request, Response, RpcError, SessionInfo, Status,
+    WatchEvent,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::windows::named_pipe::ClientOptions;
-use tokio::sync::oneshot;
+use tokio::sync::{Notify, mpsc, oneshot};
 
 /// Answers `List` with one fake session, echoes ids back for `ReadScreen`, and
 /// reports every id starting with `missing` as unknown.
@@ -338,4 +339,140 @@ async fn send_line_types_the_text_then_presses_enter_separately() {
         gap >= argus_control_server::ENTER_GAP - Duration::from_millis(10),
         "Enter followed the text after only {gap:?}"
     );
+}
+
+// ---- watching ----------------------------------------------------------------
+
+/// Streams a repaint and some output for any session, then either ends the
+/// stream (`ends`) or holds it open and reports when the client goes away.
+struct Streamer {
+    ends: bool,
+    hung_up: Arc<Notify>,
+}
+
+impl Handler for Streamer {
+    async fn handle(&self, _request: Request) -> Response {
+        Response::Ok(Reply::Done)
+    }
+
+    async fn watch(&self, id: String) -> Result<mpsc::Receiver<WatchEvent>, RpcError> {
+        if id.starts_with("missing") {
+            return Err(RpcError::new(
+                ErrorCode::UnknownSession,
+                format!("no session {id}"),
+            ));
+        }
+        let (events, receiver) = mpsc::channel(8);
+        events.send(repaint()).await.unwrap();
+        events.send(output("hello")).await.unwrap();
+        if self.ends {
+            events.send(WatchEvent::Ended).await.unwrap();
+        } else {
+            // Nothing more is ever sent, so the only way to find out the
+            // client left is the server noticing the hang-up and dropping the
+            // receiver.
+            let hung_up = Arc::clone(&self.hung_up);
+            tokio::spawn(async move {
+                events.closed().await;
+                hung_up.notify_one();
+            });
+        }
+        Ok(receiver)
+    }
+}
+
+fn repaint() -> WatchEvent {
+    WatchEvent::Repaint {
+        cols: 80,
+        rows: 24,
+        data: "\u{1b}[H\u{1b}[2J$ ".into(),
+    }
+}
+
+fn output(data: &str) -> WatchEvent {
+    WatchEvent::Output { data: data.into() }
+}
+
+fn start_streamer(label: &str, ends: bool) -> (String, Arc<Notify>, oneshot::Sender<()>) {
+    let name = unique_pipe_name(label);
+    let server = Server::bind(&name).unwrap();
+    let hung_up = Arc::new(Notify::new());
+    let handler = Arc::new(Streamer {
+        ends,
+        hung_up: Arc::clone(&hung_up),
+    });
+    let (stop, stopped) = oneshot::channel::<()>();
+    tokio::spawn(server.run(handler, async {
+        let _ = stopped.await;
+    }));
+    (name, hung_up, stop)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_watch_streams_events_in_order_until_the_end() {
+    let (name, _hung_up, _stop) = start_streamer("watch-order", true);
+    let mut watcher = Client::connect(&name)
+        .await
+        .unwrap()
+        .watch("s1")
+        .await
+        .unwrap();
+
+    assert_eq!(watcher.next().await.unwrap(), Some(repaint()));
+    assert_eq!(watcher.next().await.unwrap(), Some(output("hello")));
+    assert_eq!(watcher.next().await.unwrap(), Some(WatchEvent::Ended));
+    // And then the engine hangs up.
+    assert_eq!(watcher.next().await.unwrap(), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watching_an_unknown_session_is_a_typed_error() {
+    let (name, _hung_up, _stop) = start_streamer("watch-missing", true);
+    let error = Client::connect(&name)
+        .await
+        .unwrap()
+        .watch("missing-1")
+        .await
+        .err()
+        .expect("watching a missing session should fail");
+    match error {
+        ClientError::Rpc(rpc) => assert_eq!(rpc.code, ErrorCode::UnknownSession),
+        other => panic!("expected an rpc error, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_handler_that_cannot_stream_refuses_cleanly() {
+    let (name, _stop, _task) = start("watch-default");
+    let error = Client::connect(&name)
+        .await
+        .unwrap()
+        .watch("s1")
+        .await
+        .err()
+        .expect("the stub cannot watch");
+    match error {
+        ClientError::Rpc(rpc) => assert_eq!(rpc.code, ErrorCode::BadRequest),
+        other => panic!("expected an rpc error, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_watcher_hanging_up_on_a_quiet_session_is_noticed() {
+    // The session says nothing after the first two events, so there is no
+    // write to fail. The server has to notice the hang-up by reading.
+    let (name, hung_up, _stop) = start_streamer("watch-hangup", false);
+    let mut watcher = Client::connect(&name)
+        .await
+        .unwrap()
+        .watch("s1")
+        .await
+        .unwrap();
+    assert_eq!(watcher.next().await.unwrap(), Some(repaint()));
+
+    let noticed = hung_up.notified();
+    drop(watcher);
+    tokio::time::timeout(Duration::from_secs(5), noticed)
+        .await
+        .expect("the server should drop the stream when its client leaves");
 }

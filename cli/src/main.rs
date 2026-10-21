@@ -205,7 +205,9 @@ fn print_reply(reply: Reply) {
         Reply::Session { session } => println!("{}", render::session_line(&session)),
         Reply::Screen { screen } => print!("{}", render::screen(&screen)),
         Reply::Agents { agents } => print!("{}", render::agent_table(&agents)),
-        Reply::Done => {}
+        // Only ever the answer to `watch`, which streams instead of printing
+        // a reply.
+        Reply::Done | Reply::Watching => {}
     }
 }
 

@@ -37,7 +37,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 mod client;
 mod server;
 
-pub use client::{Client, ClientError, ENTER_GAP};
+pub use client::{Client, ClientError, ENTER_GAP, Watcher};
 pub use server::{Handler, Server};
 
 /// The pipe the engine listens on by default: one per Windows user.

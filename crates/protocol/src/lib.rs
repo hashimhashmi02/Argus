@@ -45,5 +45,5 @@ pub use argus_reducer::Status;
 pub use codec::{CodecError, FrameDecoder, MAX_FRAME_LEN, encode};
 pub use message::{
     AgentInfo, Envelope, ErrorCode, PROTOCOL_VERSION, Reply, Request, Response, RpcError,
-    ScreenView, SessionInfo,
+    ScreenView, SessionInfo, WatchEvent,
 };
