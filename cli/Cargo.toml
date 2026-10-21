@@ -22,7 +22,7 @@ clap.workspace = true
 serde_json.workspace = true
 # A CLI makes one call and exits, so a single-threaded runtime: spinning up a
 # worker pool for one round trip would cost more than the round trip.
-tokio = { workspace = true, features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
 [dev-dependencies]
 argus-control-server = { path = "../crates/control-server" }
