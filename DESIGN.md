@@ -435,6 +435,51 @@ that down:
 lost session through it is the natural next step, but it was a stretch goal for
 step 7 and is left for later.
 
+### The UI
+
+`app/` is a Tauri v2 app with a React + TypeScript frontend, and it is **only a
+client**. It owns no sessions. Closing it, or it crashing, changes nothing for
+any agent.
+
+**The webview never touches the pipe.** It calls Rust commands in
+`app/src-tauri`, and those talk to the engine through the same `Client` as the
+CLI. The pipe can spawn programs as the user, and exposing it to JavaScript
+would put that power one XSS away from anything the UI renders. Here, the
+webview can only do what a command allows. The UI also inherits everything
+already learned in Rust — framing, version checks, Enter as its own keystroke —
+rather than re-learning it in TypeScript.
+
+**Approving is the engine's job, not the UI's.** The `respond` method says
+*approve* or *deny*; the engine sends the keys from that agent's manifest. A UI
+that hardcoded "press Enter" would be right for one agent and wrong for the rest.
+
+**Every engine call from the UI is bounded** by a timeout. Without one, a single
+request that never returned stalled a poller permanently — the list froze on
+"no sessions" while the CLI listed four.
+
+### Starting the engine: Job objects
+
+When the engine is not running, the UI starts it detached. The first attempt
+used `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`, and the engine died anyway
+the moment the UI exited.
+
+The reason is a Windows **Job object**. A child process inherits its parent's
+job no matter how detached it is from the console, and when a job set to
+kill-on-close closes, every process in it dies. `cargo run`, and so
+`tauri dev`, runs programs in exactly such a job, so Ctrl+C can clean everything
+up. The engine is now started with `CREATE_BREAKAWAY_FROM_JOB`, which is the only
+way a child outlives a job.
+
+Breaking away is not always allowed: a job can forbid it, and then
+`CreateProcess` fails outright. The UI falls back to starting the engine inside
+the job, with a warning, because a working engine that dies with its launcher
+beats no engine. Launched from the Start menu or Explorer, the UI is in no job,
+and the breakaway is a no-op.
+
+Verified in the real app: start the engine from the UI, run three shells (one
+mid-command), close the window — the engine and all three keep running — and
+reopen the UI straight onto them.
+
 ## Hardening rules
 
 These are not hypothetical. They come from the bug history of Zeus and from the
@@ -479,7 +524,8 @@ Each step is a working, runnable checkpoint — not a half-finished layer.
 | 5 | `protocol` + `control-server`: RPC types and a named pipe server | **done** |
 | 6 | `cli`: spawn / list / screen / kill against the running engine | **done** |
 | 7 | `registry` persistence: the session list survives an engine restart | **done** |
-| 8 | `app/`: the Tauri UI, only once the protocol is stable | next |
+| 8a | `app/`: Tauri dashboard — list, live screen, approve/deny, spawn, kill | **done** |
+| 8b | `app/`: interactive terminal (xterm.js), needs a streaming `watch` RPC | next |
 
 The UI is last on purpose. A UI built on an unstable protocol locks in the
 mistakes of that protocol.

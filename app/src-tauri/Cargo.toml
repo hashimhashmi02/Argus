@@ -1,0 +1,29 @@
+[package]
+name = "argus-app"
+description = "The Argus desktop UI: a client of argus-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "argus-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+argus-control-server = { path = "../../crates/control-server" }
+# Only for `key_bytes`, so the UI's quick-key buttons use the same key names
+# as manifests and the CLI.
+argus-manifest = { path = "../../crates/manifest" }
+argus-protocol = { path = "../../crates/protocol" }
+anyhow.workspace = true
+serde.workspace = true
+tauri = { version = "2", features = [] }
+# Only for bounding every engine call with a timeout. Tauri already runs on
+# tokio; this just makes the timer available.
+tokio = { workspace = true, features = ["time"] }

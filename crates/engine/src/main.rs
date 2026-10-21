@@ -105,8 +105,23 @@ async fn main() -> Result<()> {
     // One shutdown signal, observed by both the server and the persister.
     let (stop_tx, stop_rx) = watch::channel(false);
     tokio::spawn(async move {
-        let _ = tokio::signal::ctrl_c().await;
-        let _ = stop_tx.send(true);
+        // Only an actual Ctrl+C stops the engine. If the handler cannot be
+        // registered at all, `ctrl_c()` returns an error at once -- and treating
+        // that as a signal would shut the engine down the moment it started.
+        // The UI launches the engine detached, with no console, which is exactly
+        // the kind of process where that could happen. No handler means no
+        // Ctrl+C, not "stop now".
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {
+                let _ = stop_tx.send(true);
+            }
+            Err(error) => {
+                eprintln!(
+                    "[argus-engine] Ctrl+C handling unavailable ({error}); running until killed"
+                );
+                std::future::pending::<()>().await;
+            }
+        }
     });
     let stopped = |mut rx: watch::Receiver<bool>| async move {
         let _ = rx.wait_for(|stop| *stop).await;

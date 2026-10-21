@@ -285,3 +285,57 @@ async fn shutdown_stops_the_accept_loop() {
         .expect("server should stop promptly")
         .unwrap();
 }
+
+/// Records every request it receives, in order.
+#[derive(Default)]
+struct Recorder {
+    seen: std::sync::Mutex<Vec<(Request, std::time::Instant)>>,
+}
+
+impl Handler for Recorder {
+    async fn handle(&self, request: Request) -> Response {
+        self.seen
+            .lock()
+            .unwrap()
+            .push((request, std::time::Instant::now()));
+        Response::Ok(Reply::Done)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn send_line_types_the_text_then_presses_enter_separately() {
+    // Not one write of "text\r" -- most TUIs read that as a paste, and a pasted
+    // Enter is just a newline. Two requests, the Enter after a pause.
+    let name = unique_pipe_name("send-line");
+    let server = Server::bind(&name).unwrap();
+    let recorder = Arc::new(Recorder::default());
+    let (_stop, stopped) = oneshot::channel::<()>();
+    tokio::spawn(server.run(Arc::clone(&recorder), async {
+        let _ = stopped.await;
+    }));
+
+    let mut client = Client::connect(&name).await.unwrap();
+    client.send_line("a1", "echo hello").await.unwrap();
+
+    let seen = recorder.seen.lock().unwrap();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert_eq!(
+        seen[0].0,
+        Request::SendText {
+            id: "a1".into(),
+            text: "echo hello".into()
+        }
+    );
+    assert_eq!(
+        seen[1].0,
+        Request::SendText {
+            id: "a1".into(),
+            text: "\r".into()
+        }
+    );
+    let gap = seen[1].1 - seen[0].1;
+    assert!(
+        gap >= argus_control_server::ENTER_GAP - Duration::from_millis(10),
+        "Enter followed the text after only {gap:?}"
+    );
+}

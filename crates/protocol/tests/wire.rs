@@ -274,3 +274,41 @@ fn a_reply_from_an_engine_predating_status_for_ms_still_parses() {
     assert_eq!(info.status_for_ms, 0);
     assert_eq!(info.status, Status::Idle);
 }
+
+#[test]
+fn the_ui_methods_have_a_stable_shape() {
+    assert_eq!(
+        json(&Envelope::new(Request::Agents)),
+        r#"{"version":1,"method":"agents"}"#
+    );
+    assert_eq!(
+        json(&Envelope::new(Request::Respond {
+            id: "a1".into(),
+            approve: true
+        })),
+        r#"{"version":1,"method":"respond","id":"a1","approve":true}"#
+    );
+    assert_eq!(
+        json(&Response::Ok(Reply::Agents {
+            agents: vec![argus_protocol::AgentInfo {
+                id: "shell".into(),
+                display_name: "Shell".into()
+            }]
+        })),
+        r#"{"ok":{"kind":"agents","agents":[{"id":"shell","display_name":"Shell"}]}}"#
+    );
+}
+
+#[test]
+fn an_older_engine_rejects_a_newer_method_as_a_payload_error() {
+    // Not a version bump, because nothing is misread: a method this build has
+    // never heard of fails to parse, as a recoverable payload error, and the
+    // engine answers bad_request. Pinned here with a method that does not exist.
+    let mut decoder = FrameDecoder::new();
+    let payload = br#"{"version":1,"method":"teleport","id":"a1"}"#;
+    decoder.push(&(payload.len() as u32).to_be_bytes());
+    decoder.push(payload);
+
+    let error = decoder.next_frame::<Envelope>().unwrap_err();
+    assert!(!error.is_fatal());
+}
