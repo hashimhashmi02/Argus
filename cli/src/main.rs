@@ -5,7 +5,8 @@
 //! on top of it. It also does what building a client always does to a protocol
 //! -- the first gap it found is why `SessionInfo` now carries `status_for_ms`.
 //!
-//! Every command is one request over the named pipe and one reply.
+//! Every command is one request over the named pipe and one reply, except
+//! `watch`, which follows a session until it ends.
 //!
 //! # Exit codes
 //!
@@ -19,11 +20,12 @@
 //! | 2 | bad command line (from `clap`) |
 //! | 3 | the engine is not running |
 
+use std::io::Write as _;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use argus_control_server::{Client, ClientError, default_pipe_name, pipe_path};
-use argus_protocol::{Reply, Request};
+use argus_control_server::{Client, ClientError, Watcher, default_pipe_name, pipe_path};
+use argus_protocol::{Reply, Request, WatchEvent};
 use clap::{Parser, Subcommand};
 
 mod render;
@@ -119,6 +121,16 @@ enum Command {
     /// Change a session's terminal size.
     Resize { id: String, cols: u16, rows: u16 },
 
+    /// Mirror a session's terminal here, read-only, until it ends.
+    ///
+    /// Draws the session's screen, colours and all, then follows it live. Stop
+    /// with Ctrl+C. Best in a terminal at least as large as the session's. With
+    /// `--json`, prints each event the engine sends as one line of JSON.
+    Watch {
+        /// Session id, or any prefix naming exactly one session.
+        id: String,
+    },
+
     /// Stop a session. Killing one that has already finished succeeds.
     Kill { id: String },
 }
@@ -147,6 +159,15 @@ enum Action {
     /// Type a line and press Enter as a separate keystroke. See
     /// [`Client::send_line`] for why that has to be two writes, not one.
     Line { id: String, text: String },
+    /// Follow a session's terminal until it ends.
+    Watch { id: String },
+}
+
+/// What came back.
+enum Outcome {
+    Reply(Reply),
+    /// A watch, already written out as it arrived.
+    Streamed,
 }
 
 impl Command {
@@ -192,8 +213,53 @@ impl Command {
             Command::Deny { id } => Request::Respond { id, approve: false },
             Command::Resize { id, cols, rows } => Request::Resize { id, cols, rows },
             Command::Kill { id } => Request::Kill { id },
+            Command::Watch { id } => return Ok(Action::Watch { id }),
         }))
     }
+}
+
+/// What leaves the terminal usable after a mirror: attributes reset, the main
+/// screen back, the cursor shown, and every input mode the session may have
+/// switched on switched off again.
+const RESTORE: &str = "\x1b[0m\x1b[?1049l\x1b[?25h\x1b[?1l\x1b>\x1b[?2004l\x1b[?1000l\
+                       \x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l\r\n";
+
+/// Write a watched session to stdout until it ends or Ctrl+C is pressed.
+async fn mirror(mut watcher: Watcher, json: bool) -> Result<(), ClientError> {
+    let mut out = std::io::stdout();
+    let result = async {
+        loop {
+            let event = tokio::select! {
+                event = watcher.next() => event?,
+                _ = tokio::signal::ctrl_c() => None,
+            };
+            let Some(event) = event else {
+                return Ok(());
+            };
+            if json {
+                let line = serde_json::to_string(&event).map_err(std::io::Error::other)?;
+                writeln!(out, "{line}")?;
+            } else {
+                match &event {
+                    WatchEvent::Repaint { data, .. } | WatchEvent::Output { data } => {
+                        out.write_all(data.as_bytes())?;
+                    }
+                    WatchEvent::Ended => {}
+                }
+            }
+            out.flush()?;
+            if event == WatchEvent::Ended {
+                return Ok(());
+            }
+        }
+    }
+    .await;
+    if !json {
+        // Restored however the mirror stopped, including on an error.
+        let _ = out.write_all(RESTORE.as_bytes());
+        let _ = out.flush();
+    }
+    result
 }
 
 fn print_reply(reply: Reply) {
@@ -221,14 +287,22 @@ async fn run(cli: Cli) -> Result<ExitCode> {
     let result = async {
         let mut client = Client::connect(&pipe).await?;
         match action {
-            Action::Call(request) => client.call(request).await,
-            Action::Line { id, text } => client.send_line(&id, &text).await.map(|()| Reply::Done),
+            Action::Call(request) => client.call(request).await.map(Outcome::Reply),
+            Action::Line { id, text } => client
+                .send_line(&id, &text)
+                .await
+                .map(|()| Outcome::Reply(Reply::Done)),
+            Action::Watch { id } => {
+                let watcher = client.watch(&id).await?;
+                mirror(watcher, cli.json).await.map(|()| Outcome::Streamed)
+            }
         }
     }
     .await;
 
     match result {
-        Ok(reply) => {
+        Ok(Outcome::Streamed) => Ok(ExitCode::SUCCESS),
+        Ok(Outcome::Reply(reply)) => {
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&reply)?);
             } else {
