@@ -11,8 +11,10 @@
 //! way.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use argus_control_server::Handler;
@@ -21,6 +23,19 @@ use argus_protocol::{ErrorCode, Reply, Request, Response, RpcError, ScreenView, 
 use argus_reducer::Timestamp;
 use argus_registry::{Entry, LookupError, Registry, now_unix_ms};
 use argus_session::{Session, SessionConfig, SessionHandle};
+use tokio::sync::Notify;
+
+mod persistence;
+
+use persistence::Persistence;
+pub use persistence::{StartupReport, default_state_path};
+
+/// How often the persister checks for changes when nothing has prompted it.
+///
+/// Status changes happen inside session tasks the engine is not told about, so
+/// they are picked up by this tick. A second is short enough that a crash loses
+/// very little, and cheap because an unchanged registry is not rewritten.
+const PERSIST_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Every agent the engine can launch, and every session it has launched.
 pub struct Engine {
@@ -28,6 +43,11 @@ pub struct Engine {
     /// a stable order.
     agents: BTreeMap<String, Arc<Agent>>,
     registry: Registry<SessionHandle>,
+    /// `None` for an in-memory engine, as the tests mostly use.
+    persistence: Option<Persistence>,
+    /// Poked whenever the registry changes shape, so a new session reaches the
+    /// disk immediately rather than at the next tick.
+    dirty: Notify,
 }
 
 impl Engine {
@@ -46,7 +66,83 @@ impl Engine {
         Ok(Self {
             agents: by_id,
             registry: Registry::new(),
+            persistence: None,
+            dirty: Notify::new(),
         })
+    }
+
+    /// Remember sessions in `path`, restoring whatever it holds from a previous
+    /// run.
+    ///
+    /// Sessions that were still running when the previous engine stopped come
+    /// back as finished and lost: their processes went down with it. An
+    /// unparseable file is quarantined rather than overwritten, and the report
+    /// says where it went. An *unreadable* file is an error -- the engine
+    /// refuses to start rather than risk writing over history it could not see.
+    ///
+    /// Writes the restored state straight back, so the file reflects "lost"
+    /// even if this engine is itself killed before its first tick.
+    pub fn with_state_file(mut self, path: &Path) -> Result<(Self, StartupReport)> {
+        let (persistence, records, report) = Persistence::open(path)
+            .with_context(|| format!("could not read the state file {}", path.display()))?;
+
+        self.registry.restore(records);
+        persistence
+            .save_if_changed(&self.registry.list())
+            .with_context(|| format!("could not write the state file {}", path.display()))?;
+
+        self.persistence = Some(persistence);
+        Ok((self, report))
+    }
+
+    /// Where this engine remembers sessions, if it does.
+    pub fn state_path(&self) -> Option<&Path> {
+        self.persistence.as_ref().map(Persistence::path)
+    }
+
+    /// Write the registry to the state file if anything changed.
+    ///
+    /// Blocking I/O, so it runs on the blocking pool rather than a runtime
+    /// worker. Returns whether a write happened.
+    pub async fn save(self: &Arc<Self>) -> Result<bool> {
+        let engine = Arc::clone(self);
+        tokio::task::spawn_blocking(move || match &engine.persistence {
+            Some(p) => p.save_if_changed(&engine.registry.list()),
+            None => Ok(false),
+        })
+        .await
+        .context("state save panicked")?
+        .context("could not save the state file")
+    }
+
+    /// Keep the state file up to date until `shutdown` completes, then save one
+    /// last time.
+    ///
+    /// Wakes on every new session and once a second regardless. A failed save
+    /// is reported and retried on the next wake rather than stopping the engine:
+    /// a full disk should not take running agents down with it.
+    pub async fn run_persister(self: Arc<Self>, shutdown: impl Future<Output = ()>) {
+        if self.persistence.is_none() {
+            return;
+        }
+        tokio::pin!(shutdown);
+        let mut tick = tokio::time::interval(PERSIST_INTERVAL);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        loop {
+            tokio::select! {
+                () = &mut shutdown => break,
+                () = self.dirty.notified() => {}
+                _ = tick.tick() => {}
+            }
+            if let Err(error) = self.save().await {
+                eprintln!("[argus-engine] warning: {error:#}");
+            }
+        }
+
+        if let Err(error) = self.save().await {
+            eprintln!("[argus-engine] warning: final save failed: {error:#}");
+        }
     }
 
     /// Load every `*.json` manifest in a directory.
@@ -206,6 +302,10 @@ impl Engine {
         // its task owns everything it needs. The registry keeps a handle, which
         // is all anything will ever need to reach it.
         let id = self.registry.insert(agent_id, cwd, session.handle());
+        // Persist the new session now rather than at the next tick: a spawn is
+        // the one change a person would be surprised to see missing after a
+        // crash.
+        self.dirty.notify_one();
         let entry = self.find(&id)?;
         Ok(Reply::Session {
             session: info(&entry),
@@ -279,6 +379,16 @@ fn info(entry: &Entry<SessionHandle>) -> SessionInfo {
 }
 
 fn finished(entry: &Entry<SessionHandle>) -> RpcError {
+    // "Finished" would be exactly the claim `lost` exists to avoid making.
+    if entry.restored.as_ref().is_some_and(|r| r.lost) {
+        return RpcError::new(
+            ErrorCode::SessionFinished,
+            format!(
+                "session {} was lost when the previous engine stopped; spawn a new one",
+                entry.id
+            ),
+        );
+    }
     RpcError::new(
         ErrorCode::SessionFinished,
         format!("session {} has already finished", entry.id),

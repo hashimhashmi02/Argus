@@ -26,7 +26,8 @@ argus-protocol = { path = "../protocol" }
 argus-reducer = { path = "../reducer" }
 argus-registry = { path = "../registry" }
 argus-session = { path = "../session" }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "sync"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
 
 [dev-dependencies]
 serde_json.workspace = true

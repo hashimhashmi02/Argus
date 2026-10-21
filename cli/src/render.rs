@@ -30,6 +30,10 @@ pub fn status(info: &SessionInfo) -> String {
         Status::NeedsYou => "NEEDS YOU".to_string(),
         Status::Working => "working".to_string(),
         Status::Idle => "idle".to_string(),
+        // Lost is checked first: it is always reported as done, but "done"
+        // would claim the session finished. It did not -- it was running when
+        // the engine stopped, and went down with it.
+        Status::Done if info.lost => "lost".to_string(),
         Status::Done => match info.exit_code {
             Some(code) => format!("done ({code})"),
             None => "done".to_string(),
@@ -184,6 +188,10 @@ mod tests {
         let mut done = info("a", Status::Done, 0);
         done.exit_code = Some(1);
         assert_eq!(status(&done), "done (1)");
+
+        let mut lost = info("a", Status::Done, 0);
+        lost.lost = true;
+        assert_eq!(status(&lost), "lost", "a lost session did not finish");
     }
 
     #[test]
