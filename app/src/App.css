@@ -1,129 +1,622 @@
+/*
+ * Argus as a terminal multiplexer. Everything here is drawn in one terminal
+ * face on the Campbell palette (Windows Terminal's default), with 1px rules
+ * for pane borders and a reverse-video status line. There are no cards,
+ * shadows, rounded corners or glows: a pane is a rectangle of screen with a
+ * border line, as it is in tmux.
+ *
+ * Colour is spent on meaning only. Bright yellow marks exactly the places you
+ * can act -- a pane that needs you, a prompt, the one button on an empty
+ * window. Everything else is the terminal's own grey on black.
+ */
+
+/*
+ * Cascadia Mono, Windows Terminal's face (SIL OFL 1.1, via @fontsource). The
+ * installed copy is preferred where Windows has one, since it covers every
+ * glyph an agent prints; the bundled subsets -- Latin, Latin Extended, and the
+ * box-drawing block TUIs are built from -- make sure the face is the same
+ * everywhere else. Anything outside them falls back glyph by glyph.
+ */
+@font-face {
+  font-family: "Argus Mono";
+  font-weight: 400;
+  font-display: block;
+  src:
+    local("Cascadia Mono"),
+    url("@fontsource/cascadia-mono/files/cascadia-mono-latin-400-normal.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
+    U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF;
+}
+
+@font-face {
+  font-family: "Argus Mono";
+  font-weight: 700;
+  font-display: block;
+  src:
+    local("Cascadia Mono Bold"),
+    url("@fontsource/cascadia-mono/files/cascadia-mono-latin-700-normal.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
+    U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF;
+}
+
+@font-face {
+  font-family: "Argus Mono";
+  font-weight: 400;
+  font-display: block;
+  src:
+    local("Cascadia Mono"),
+    url("@fontsource/cascadia-mono/files/cascadia-mono-latin-ext-400-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1D00-1DBF,
+    U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Argus Mono";
+  font-weight: 700;
+  font-display: block;
+  src:
+    local("Cascadia Mono Bold"),
+    url("@fontsource/cascadia-mono/files/cascadia-mono-latin-ext-700-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1D00-1DBF,
+    U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Argus Mono";
+  font-weight: 400;
+  font-display: block;
+  src:
+    local("Cascadia Mono"),
+    url("@fontsource/cascadia-mono/files/cascadia-mono-symbols2-400-normal.woff2") format("woff2");
+  unicode-range: U+2000-2001, U+2004-2008, U+200A, U+23B8-23BD, U+2500-259F;
+}
+
+@font-face {
+  font-family: "Argus Mono";
+  font-weight: 700;
+  font-display: block;
+  src:
+    local("Cascadia Mono Bold"),
+    url("@fontsource/cascadia-mono/files/cascadia-mono-symbols2-700-normal.woff2") format("woff2");
+  unicode-range: U+2000-2001, U+2004-2008, U+200A, U+23B8-23BD, U+2500-259F;
+}
+
 :root {
-  --bg: #0f1115;
-  --panel: #161a21;
-  --panel-2: #1c212a;
-  --border: #262c36;
-  --text: #d7dce4;
-  --muted: #8a93a3;
-  --needs: #f2a33a;
-  --needs-bg: #3a2a12;
-  --working: #5aa9ff;
-  --idle: #8a93a3;
-  --done: #4cc38a;
-  --lost: #e5687a;
-  --mono: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
   color-scheme: dark;
-  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
-  font-size: 14px;
-  color: var(--text);
-  background: var(--bg);
+
+  /* Campbell, by its ANSI names. */
+  --black: #0c0c0c;
+  --red: #c50f1f;
+  --green: #13a10e;
+  --yellow: #c19c00;
+  --cyan: #3a96dd;
+  --white: #cccccc;
+  --bright-black: #767676;
+  --bright-red: #e74856;
+  --bright-yellow: #f9f1a5;
+  --bright-white: #f2f2f2;
+
+  --mono: "Argus Mono", "Cascadia Mono", Consolas, monospace;
+  --text: 13px;
+  /* One row of chrome: a pane border, the status line. */
+  --line: 20px;
+  --rule: var(--bright-black);
 }
 
-* { box-sizing: border-box; }
-html, body, #root { height: 100%; margin: 0; }
-button, input, select { font: inherit; color: inherit; }
-code { font-family: var(--mono); }
-
-.app { height: 100%; display: flex; flex-direction: column; }
-
-.topbar {
-  display: flex; align-items: center; gap: 14px;
-  padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
-}
-.topbar h1 { margin: 0; font-size: 16px; letter-spacing: 0.04em; }
-.engine { font-size: 12px; padding: 2px 8px; border-radius: 999px; }
-.engine.up { color: var(--done); background: #12301f; }
-.engine.down { color: var(--lost); background: #3a1820; }
-.need-count {
-  margin-left: auto; font-weight: 600; color: var(--needs);
-  background: var(--needs-bg); padding: 2px 10px; border-radius: 999px;
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
-.offline {
-  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 6px; color: var(--muted);
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
 }
-.offline button { margin-top: 12px; }
 
-.layout { flex: 1; display: grid; grid-template-columns: 340px 1fr; min-height: 0; }
-.sidebar {
-  border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0;
+html {
+  scrollbar-color: var(--bright-black) var(--black);
+}
+
+body {
+  overflow: hidden;
+  background: var(--black);
+  color: var(--white);
+  font: var(--text) / var(--line) var(--mono);
+  font-variant-ligatures: none;
 }
 
 button {
-  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
-  padding: 6px 12px; cursor: pointer;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  cursor: pointer;
 }
-button:hover:not(:disabled) { border-color: #3a4352; }
-button:disabled { opacity: 0.45; cursor: default; }
-input, select {
-  background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px;
+
+button:disabled {
+  cursor: default;
+}
+
+input {
+  font: inherit;
+}
+
+::selection {
+  background: var(--white);
+  color: var(--black);
+}
+
+:focus-visible {
+  outline: 1px solid var(--bright-white);
+  outline-offset: -1px;
+}
+
+/*
+ * Only a screen's text can be selected, so dragging across the window copies
+ * what an agent printed and never picks up borders, flags or prompts with it.
+ */
+.pane-head,
+.pane-prompt,
+.pane-keys,
+.status,
+button {
+  user-select: none;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---- The window: panes above, one status row below ---------------------- */
+
+.mux {
+  height: 100vh;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) var(--line);
+}
+
+.panes {
   min-width: 0;
+  min-height: 0;
+  display: flex;
 }
 
-.spawn-form { display: grid; gap: 6px; padding: 12px; border-bottom: 1px solid var(--border); }
-
-.session-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; }
-.session-row {
-  width: 100%; display: grid; grid-template-columns: auto 1fr auto; grid-template-rows: auto auto;
-  column-gap: 8px; row-gap: 2px; text-align: left; padding: 8px 10px; margin-bottom: 4px;
-  background: transparent; border-color: transparent;
+/*
+ * Panes are separated the way tmux separates them: a 1px vertical rule
+ * between columns (the gap, showing the row's rule-coloured background), and
+ * each pane's own top border line between rows.
+ */
+.tiled {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
-.session-row.selected { background: var(--panel-2); border-color: var(--border); }
-.session-agent { font-weight: 600; }
-.session-age { color: var(--muted); font-size: 12px; }
-.session-id { grid-column: 2 / 4; color: var(--muted); font-family: var(--mono); font-size: 11px; }
-.empty { color: var(--muted); padding: 12px; }
 
-.badge {
-  font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 4px;
-  text-transform: uppercase; letter-spacing: 0.03em; white-space: nowrap;
+.tile-row {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  gap: 1px;
+  background: var(--rule);
 }
-.badge.needs_you { color: #1a1206; background: var(--needs); }
-.badge.working { color: var(--working); background: #142235; }
-.badge.idle { color: var(--idle); background: #1d222b; }
-.badge.done { color: var(--done); background: #12301f; }
-.badge.lost { color: var(--lost); background: #3a1820; }
 
-.panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.panel.loading, .empty-panel {
-  display: flex; align-items: center; justify-content: center; color: var(--muted);
+.main-vertical {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 1px;
+  background: var(--rule);
 }
-.panel-header {
-  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
-}
-.panel-title { font-weight: 600; }
-.panel-meta { color: var(--muted); font-size: 12px; flex: 1; }
-.danger:hover:not(:disabled) { border-color: var(--lost); color: var(--lost); }
 
-.attention {
-  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
-  background: var(--needs-bg); color: var(--needs); font-weight: 600;
-  border-bottom: 1px solid #5a4219;
+.main-tile {
+  flex: 0 0 60%;
+  min-width: 0;
+  display: flex;
 }
-.attention span { flex: 1; }
-.approve { background: var(--needs); color: #1a1206; border-color: var(--needs); }
-.deny { border-color: #5a4219; }
 
-.notice {
-  padding: 10px 14px; color: var(--lost); background: #2a1419; border-bottom: 1px solid var(--border);
+.side {
+  background: var(--black);
+}
+
+/* ---- A pane ------------------------------------------------------------- */
+
+.pane {
+  --pane-rule: var(--rule);
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--black);
+}
+
+/* The border line: ─ 0 claude-code ─ a1b2c3d4 ─ needs you 12s ─ rule ──── */
+.pane-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  height: var(--line);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.pane-head .tick,
+.pane-head .fill {
+  border-top: 1px solid var(--pane-rule);
+}
+
+.pane-head .tick {
+  flex: none;
+  width: 1ch;
+}
+
+.pane-head .fill {
+  flex: 1;
+  min-width: 1ch;
+}
+
+.seg {
+  padding: 0 0.5ch;
+}
+
+.seg-name {
+  color: var(--bright-white);
+}
+
+.is-working .seg-status {
+  color: var(--cyan);
+}
+
+/* The current pane: tmux's green active border. */
+.pane.is-current {
+  --pane-rule: var(--green);
+}
+
+.pane.is-current .seg-name {
+  color: var(--green);
+}
+
+/* Finished panes stay where they were, their border broken. */
+.is-done .pane-head .tick,
+.is-done .pane-head .fill,
+.is-lost .pane-head .tick,
+.is-lost .pane-head .fill {
+  border-top-style: dashed;
+}
+
+.is-failed .seg-status,
+.is-lost .seg-status {
+  color: var(--bright-red);
+}
+
+.pane.is-lost {
+  --pane-rule: var(--red);
+}
+
+/* Needs you: the only bright colour in the window, top and bottom. */
+.pane.is-needs_you {
+  --pane-rule: var(--black);
+  z-index: 1;
+  outline: 1px solid var(--bright-yellow);
+  outline-offset: -1px;
+}
+
+.is-needs_you .pane-head {
+  background: var(--bright-yellow);
+  color: var(--black);
+}
+
+.pane.is-needs_you .seg-name {
+  color: var(--black);
+  font-weight: 700;
+}
+
+.pane-prompt {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 1ch;
+  height: var(--line);
+  padding: 0 1ch;
+  background: var(--bright-yellow);
+  color: var(--black);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.answer {
+  padding: 0 1ch;
+  background: var(--black);
+  color: var(--bright-yellow);
+  font-weight: 700;
+}
+
+.answer:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.pane-keys {
+  flex: none;
+  display: flex;
+  align-items: center;
+  height: var(--line);
+  border-top: 1px solid var(--pane-rule);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.pane-keys-label {
+  padding: 0 1ch;
+}
+
+.key {
+  padding: 0 1ch;
+  color: var(--bright-white);
+}
+
+.key:hover {
+  background: var(--white);
+  color: var(--black);
+}
+
+.pane-note {
+  flex: 1;
+  margin: 0;
+  padding: 0 1ch;
+  max-width: 72ch;
+}
+
+/* ---- The screen ---------------------------------------------------------- */
+
+/*
+ * The whole grid is sized to fit its pane: the font is whichever is smaller,
+ * the pane's width over the screen's columns or its height over its rows
+ * (0.6em is Cascadia Mono's advance, rounded up). A tile is the full screen in
+ * miniature; zoomed, it comes up to reading size and stops there.
+ */
+.screen-fit {
+  flex: 1 1 0;
+  min-height: 0;
+  padding: 2px 0 0 1ch;
+  container-type: size;
+  overflow: hidden;
 }
 
 .screen {
-  flex: 1; margin: 0; padding: 12px 14px; overflow: auto; background: #0a0c10;
-  font-family: var(--mono); font-size: 13px; line-height: 1.35; white-space: pre;
+  margin: 0;
+  font-family: var(--mono);
+  font-size: clamp(
+    3px,
+    min(100cqw / (var(--cols) * 0.6), 100cqh / (var(--rows) * 1.2)),
+    18px
+  );
+  line-height: 1.2;
+  white-space: pre;
 }
 
-.input-row {
-  display: flex; gap: 6px; padding: 10px 14px; border-top: 1px solid var(--border);
-  background: var(--panel);
+.screen-row {
+  height: 1.2em;
+  overflow: hidden;
 }
-.input-row input { flex: 1; font-family: var(--mono); }
-.key { font-family: var(--mono); font-size: 12px; padding: 6px 9px; }
 
-.toast {
-  position: fixed; bottom: 16px; right: 16px; max-width: 480px; padding: 10px 14px;
-  background: #3a1820; color: #ffd5dc; border: 1px solid var(--lost); border-radius: 8px;
-  cursor: pointer;
+.cursor {
+  background: var(--white);
+  color: var(--black);
+}
+
+/* ---- The status line ------------------------------------------------------ */
+
+.status {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: var(--line);
+  background: var(--white);
+  color: var(--black);
+  white-space: nowrap;
+  overflow: hidden;
+  view-transition-name: status;
+}
+
+.status :focus-visible {
+  outline-color: var(--black);
+}
+
+.status-session,
+.status-text,
+.engine,
+.clock {
+  flex: none;
+  padding: 0 1ch;
+}
+
+.windows {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.window {
+  flex: none;
+  padding: 0 1ch;
+}
+
+.window:hover,
+.hint:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+/* tmux draws a bell in reverse; on a reverse status line, that is a dark notch. */
+.window.is-bell {
+  background: var(--black);
+  color: var(--bright-yellow);
+  font-weight: 700;
+}
+
+.hints {
+  flex: none;
+  display: flex;
+}
+
+.hint {
+  padding: 0 1ch;
+}
+
+.hint b {
+  font-weight: 700;
+}
+
+.engine.is-down {
+  background: var(--black);
+  color: var(--bright-red);
+}
+
+.engine.is-error {
+  flex: 0 1 auto;
+  min-width: 12ch;
+  max-width: 48ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The status line as a prompt: tmux's yellow, because here you act. */
+.status.is-prompt {
+  background: var(--bright-yellow);
+}
+
+.status.is-message {
+  background: var(--black);
+  color: var(--bright-white);
+  border-top: 1px solid var(--rule);
+  cursor: default;
+}
+
+.status.is-error {
+  color: var(--bright-red);
+}
+
+.prompt-input {
+  flex: 1 1 auto;
+  min-width: 8ch;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--black);
+  caret-color: var(--black);
+}
+
+/* Ink thinned toward the yellow it sits on, still above 4.5:1. */
+.prompt-input::placeholder {
+  color: color-mix(in srgb, var(--black) 65%, var(--bright-yellow));
+  opacity: 1;
+}
+
+.prompt-hint {
+  flex: none;
+  padding: 0 1ch;
+}
+
+.agents {
+  flex: none;
+  display: flex;
+}
+
+.agent {
+  padding: 0 1ch;
+}
+
+.agent[aria-checked="true"] {
+  background: var(--black);
+  color: var(--bright-yellow);
+}
+
+/* ---- Whole-window notices: no server, no sessions ------------------------- */
+
+.notice {
+  flex: 1;
+  padding: var(--line) 2ch;
+  overflow: auto;
+}
+
+.notice p {
+  margin: 0 0 var(--line);
+}
+
+.notice > p:first-child {
+  color: var(--bright-white);
+}
+
+.notice-body {
+  max-width: 72ch;
+}
+
+.keys {
+  border-collapse: collapse;
+  margin-bottom: var(--line);
+}
+
+.keys th,
+.keys td {
+  padding: 0 3ch 0 0;
+  text-align: left;
+  font-weight: 400;
+  vertical-align: top;
+}
+
+.keys th {
+  color: var(--bright-white);
+}
+
+.act {
+  padding: 0 1ch;
+  background: var(--bright-yellow);
+  color: var(--black);
+}
+
+.act:disabled {
+  background: var(--yellow);
+}
+
+/* ---- The zoom morph -------------------------------------------------------- */
+
+/*
+ * Each pane has its own view-transition name, so zooming, tiling back and a
+ * bell's pane swelling into the main tile all animate box to box. The
+ * snapshots are not stretched: each keeps its text at its own size, anchored
+ * top-left and clipped by the moving box, like a terminal being resized.
+ */
+::view-transition-group(*) {
+  animation-duration: 180ms;
+  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+::view-transition-image-pair(*) {
+  overflow: hidden;
+}
+
+::view-transition-old(*),
+::view-transition-new(*) {
+  width: 100%;
+  height: 100%;
+  object-fit: none;
+  object-position: left top;
 }
