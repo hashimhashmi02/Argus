@@ -28,7 +28,18 @@ the Argus window never kills a running agent.
 Requires the Rust MSVC toolchain (`rustup default stable-x86_64-pc-windows-msvc`)
 and the Visual Studio Build Tools C++ workload for the linker.
 
-Start the engine in one terminal:
+The quickest way to see it is the narrated demo. It builds everything, runs a
+private engine against a scratch state file, and walks through three shells at
+once, answering a blocked one from the CLI, and surviving a crash:
+
+```powershell
+.\scripts\demo.ps1
+```
+
+Add `-WithClaude` for a fourth act that drives a real Claude Code session. That
+sends one small prompt on your Claude account, and needs `claude` logged in.
+
+To drive it by hand instead, start the engine in one terminal:
 
 ```bash
 cargo run -p argus-engine
