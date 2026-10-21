@@ -1,16 +1,14 @@
-//! The set of known sessions.
+//! The set of known sessions, and the file that remembers them.
 //!
-//! This step builds the in-memory half: a table of live and finished sessions,
-//! keyed by short ids a person can type. Persistence to disk -- so the list
-//! survives an engine restart -- arrives in step 7, and with it the two rules
-//! that motivated giving this its own crate:
+//! Two halves. [`Registry`] is the in-memory table of live and finished
+//! sessions, keyed by short ids a person can type. [`persist`] is the state file
+//! that lets that list survive an engine restart, and it is where the two rules
+//! that motivated this crate live:
 //!
 //! 1. A state file that fails to parse is *quarantined* -- renamed aside --
-//!    never treated as empty and overwritten. Silently starting fresh on a parse
-//!    error deletes the user's session history at exactly the moment they most
-//!    need it.
-//! 2. Deserialization is permissive and preserves unknown fields, so a file
-//!    written by a newer Argus survives a round trip through an older one.
+//!    never treated as empty and overwritten.
+//! 2. Unknown fields survive a round trip, so a file written by a newer Argus is
+//!    not stripped by an older one.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -18,21 +16,39 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub mod persist;
+
+pub use persist::{Loaded, STATE_FORMAT, SessionRecord, StateFile, now_unix_ms};
+
 /// One known session.
 ///
 /// Generic over the live handle so the table logic -- ids, prefix lookup,
 /// ordering -- can be tested without spawning a process, and so this crate sits
 /// *below* `argus-session` in the dependency graph instead of on top of it. The
-/// engine uses `Entry<SessionHandle>`. When step 7 persists entries, `H` is
-/// exactly the part that is not written to disk: a live handle means nothing
-/// after a restart.
+/// engine uses `Entry<SessionHandle>`.
 #[derive(Clone)]
 pub struct Entry<H> {
     pub id: String,
     /// The manifest id it was spawned from.
     pub agent: String,
     pub cwd: Option<PathBuf>,
-    pub handle: H,
+
+    /// Wall-clock creation time, Unix milliseconds.
+    pub created_unix_ms: u64,
+
+    /// The live session, if this engine spawned it.
+    ///
+    /// `None` for a session remembered from a previous run. Its process died
+    /// with the previous engine, so there is nothing to hold a handle to --
+    /// which is exactly why the handle is the one part never written to disk.
+    pub handle: Option<H>,
+
+    /// What the state file said about a session restored from a previous run.
+    ///
+    /// Kept whole, including any fields this build does not understand, so that
+    /// saving it again writes back everything that was read.
+    pub restored: Option<SessionRecord>,
+
     /// Creation order, so `list` is stable rather than in hash order.
     seq: u64,
 }
@@ -108,11 +124,47 @@ impl<H: Clone> Registry<H> {
                 id: id.clone(),
                 agent: agent.to_string(),
                 cwd,
-                handle,
+                created_unix_ms: now_unix_ms(),
+                handle: Some(handle),
+                restored: None,
                 seq,
             },
         );
         id
+    }
+
+    /// Bring back sessions remembered from a previous run, oldest first.
+    ///
+    /// Keeps their ids, so `argus-cli screen 3fa1` names the same session after
+    /// a restart as before it. A record whose id is already present -- only
+    /// possible in a hand-edited or damaged file -- is skipped rather than
+    /// allowed to replace an existing entry.
+    pub fn restore(&self, records: impl IntoIterator<Item = SessionRecord>) -> usize {
+        let mut records: Vec<SessionRecord> = records.into_iter().collect();
+        records.sort_by_key(|r| r.created_unix_ms);
+
+        let mut sessions = self.sessions.lock().unwrap();
+        let mut restored = 0;
+        for record in records {
+            if record.id.is_empty() || sessions.contains_key(&record.id) {
+                continue;
+            }
+            let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
+            sessions.insert(
+                record.id.clone(),
+                Entry {
+                    id: record.id.clone(),
+                    agent: record.agent.clone(),
+                    cwd: record.cwd.clone(),
+                    created_unix_ms: record.created_unix_ms,
+                    handle: None,
+                    restored: Some(record),
+                    seq,
+                },
+            );
+            restored += 1;
+        }
+        restored
     }
 
     /// Find a session by full id, or by any prefix that names exactly one.
@@ -228,7 +280,9 @@ mod lookup_tests {
                     id: id.to_string(),
                     agent: "test".into(),
                     cwd: None,
-                    handle: seq as u32,
+                    created_unix_ms: seq as u64,
+                    handle: Some(seq as u32),
+                    restored: None,
                     seq: seq as u64,
                 },
             );
@@ -240,7 +294,7 @@ mod lookup_tests {
     #[test]
     fn an_exact_id_is_found() {
         let registry = registry_with(&["3fa1c2d4", "9b0e1172"]);
-        assert_eq!(registry.find("9b0e1172").unwrap().handle, 1);
+        assert_eq!(registry.find("9b0e1172").unwrap().handle, Some(1));
     }
 
     #[test]

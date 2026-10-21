@@ -19,7 +19,7 @@ use argus_control_server::Handler;
 use argus_manifest::Agent;
 use argus_protocol::{ErrorCode, Reply, Request, Response, RpcError, ScreenView, SessionInfo};
 use argus_reducer::Timestamp;
-use argus_registry::{Entry, LookupError, Registry};
+use argus_registry::{Entry, LookupError, Registry, now_unix_ms};
 use argus_session::{Session, SessionConfig, SessionHandle};
 
 /// Every agent the engine can launch, and every session it has launched.
@@ -97,31 +97,50 @@ impl Engine {
 
             Request::SendText { id, text } => {
                 let entry = self.find(&id)?;
-                if !entry.handle.send_text(&text).await {
-                    // Typing into a session that has already ended is almost
-                    // always a mistake worth telling the user about -- they
-                    // think they are talking to something that is not there.
-                    return Err(finished(&entry));
+                // Typing into a session that has already ended is almost always
+                // a mistake worth telling the user about -- they think they are
+                // talking to something that is not there. A session restored
+                // from a previous run has no handle at all, and is the same case.
+                match &entry.handle {
+                    Some(handle) if handle.send_text(&text).await => Ok(Reply::Done),
+                    _ => Err(finished(&entry)),
                 }
-                Ok(Reply::Done)
             }
 
             Request::Resize { id, cols, rows } => {
                 let entry = self.find(&id)?;
-                if !entry.handle.resize(cols, rows).await {
-                    return Err(finished(&entry));
+                match &entry.handle {
+                    Some(handle) if handle.resize(cols, rows).await => Ok(Reply::Done),
+                    _ => Err(finished(&entry)),
                 }
-                Ok(Reply::Done)
             }
 
             Request::ReadScreen { id } => {
                 let entry = self.find(&id)?;
-                let snapshot = entry.handle.snapshot();
+                let session = info(&entry);
+                let Some(handle) = &entry.handle else {
+                    // Screens are not persisted -- they would be most of the
+                    // state file and stale by definition -- so a session from a
+                    // previous run has none to show. An empty screen rather than
+                    // an error, so `screen` on any listed id still says what
+                    // happened to the session in its header.
+                    return Ok(Reply::Screen {
+                        screen: ScreenView {
+                            session,
+                            cols: 0,
+                            rows: 0,
+                            cursor_row: 0,
+                            cursor_col: 0,
+                            lines: Vec::new(),
+                        },
+                    });
+                };
+                let snapshot = handle.snapshot();
                 let (cols, rows) = snapshot.screen.size();
                 let (cursor_row, cursor_col) = snapshot.screen.cursor();
                 Ok(Reply::Screen {
                     screen: ScreenView {
-                        session: info(&entry),
+                        session,
                         cols,
                         rows,
                         cursor_row,
@@ -133,11 +152,14 @@ impl Engine {
 
             Request::Kill { id } => {
                 let entry = self.find(&id)?;
-                // Idempotent: killing something already dead succeeds. The
+                // Idempotent: killing something already dead -- or restored
+                // from a previous run, which is the same thing -- succeeds. The
                 // caller wanted it stopped, and it is. Making a script check
-                // status before every kill to avoid a spurious error would just
-                // move a race from here into every caller.
-                let _ = entry.handle.kill().await;
+                // status before every kill would just move a race from here into
+                // every caller.
+                if let Some(handle) = &entry.handle {
+                    let _ = handle.kill().await;
+                }
                 Ok(Reply::Done)
             }
         }
@@ -209,16 +231,50 @@ impl Handler for Engine {
 }
 
 fn info(entry: &Entry<SessionHandle>) -> SessionInfo {
-    let snapshot = entry.handle.snapshot();
-    SessionInfo {
-        id: entry.id.clone(),
-        agent: entry.agent.clone(),
-        status: snapshot.status,
-        since_ms: snapshot.since.saturating_since(Timestamp::ZERO).as_millis() as u64,
-        status_for_ms: entry.handle.status_age().as_millis() as u64,
-        rule: snapshot.rule,
-        pid: snapshot.pid,
-        exit_code: snapshot.exit_code,
+    match (&entry.handle, &entry.restored) {
+        (Some(handle), _) => {
+            let snapshot = handle.snapshot();
+            SessionInfo {
+                id: entry.id.clone(),
+                agent: entry.agent.clone(),
+                status: snapshot.status,
+                since_ms: snapshot.since.saturating_since(Timestamp::ZERO).as_millis() as u64,
+                status_for_ms: handle.status_age().as_millis() as u64,
+                rule: snapshot.rule,
+                pid: snapshot.pid,
+                exit_code: snapshot.exit_code,
+                lost: false,
+            }
+        }
+        (None, Some(record)) => SessionInfo {
+            id: entry.id.clone(),
+            agent: entry.agent.clone(),
+            status: record.status,
+            since_ms: record
+                .status_since_unix_ms
+                .saturating_sub(record.created_unix_ms),
+            // Wall clock on both sides, because the monotonic clock the live
+            // path uses did not survive the restart.
+            status_for_ms: now_unix_ms().saturating_sub(record.status_since_unix_ms),
+            rule: record.rule.clone(),
+            pid: None,
+            exit_code: record.exit_code,
+            lost: record.lost,
+        },
+        // The registry only ever creates entries one way or the other. If that
+        // changes, an honest "done, unknown" is a better answer than a panic in
+        // the middle of serving a request.
+        (None, None) => SessionInfo {
+            id: entry.id.clone(),
+            agent: entry.agent.clone(),
+            status: argus_reducer::Status::Done,
+            since_ms: 0,
+            status_for_ms: 0,
+            rule: None,
+            pid: None,
+            exit_code: None,
+            lost: true,
+        },
     }
 }
 

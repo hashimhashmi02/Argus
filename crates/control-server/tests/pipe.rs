@@ -47,6 +47,7 @@ fn fake(id: &str) -> SessionInfo {
         rule: None,
         pid: None,
         exit_code: None,
+        lost: false,
     }
 }
 

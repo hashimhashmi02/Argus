@@ -161,6 +161,7 @@ mod tests {
             rule: None,
             pid: Some(100),
             exit_code: None,
+            lost: false,
         }
     }
 

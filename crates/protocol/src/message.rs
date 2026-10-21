@@ -155,6 +155,18 @@ pub struct SessionInfo {
     pub pid: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<u32>,
+    /// The session was still running when a previous engine stopped, and its
+    /// process went with it.
+    ///
+    /// Always paired with `status: done` and no exit code. A separate flag
+    /// rather than a fifth `Status`, because `Status` is the reducer's judgement
+    /// of a *live* session and this is a fact about history -- no live session
+    /// is ever "lost".
+    ///
+    /// Additive, like `status_for_ms`: omitted when false, defaulted when
+    /// absent, so no version bump.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lost: bool,
 }
 
 /// An emulated screen, as text.
