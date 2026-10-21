@@ -9,10 +9,9 @@ and which is **done**.
 
 Windows-native, written in Rust, built on [ConPTY](https://devblogs.microsoft.com/commandline/windows-command-line-introducing-the-windows-pseudo-console-conpty/).
 
-> **Status: early.** Step 5 of 8. The engine runs as a daemon, owns live agent
-> sessions, and serves a control API over a named pipe. There is no command-line
-> client yet (step 6), sessions do not survive an engine restart (step 7), and
-> there is no UI.
+> **Status: early.** Step 6 of 8. The engine runs as a daemon and `argus-cli`
+> drives it end to end. Sessions do not yet survive an engine restart (step 7),
+> and there is no UI.
 > See [DESIGN.md](DESIGN.md) for the architecture and the build order.
 
 ## Why
@@ -29,23 +28,47 @@ the Argus window never kills a running agent.
 Requires the Rust MSVC toolchain (`rustup default stable-x86_64-pc-windows-msvc`)
 and the Visual Studio Build Tools C++ workload for the linker.
 
-Start the engine:
+Start the engine in one terminal:
 
 ```bash
 cargo run -p argus-engine
 ```
 
-It loads every manifest in `manifests/` and listens on
-`\\.\pipe\argus-<your username>`. There is no client binary yet — that is step
-6 — but the protocol is plain length-prefixed JSON, so anything that can open a
-named pipe can drive it. A request looks like this:
+It loads every manifest in `manifests/` and listens on a named pipe for your
+user. Then drive it from another:
 
-```json
-{"version":1,"method":"spawn","agent":"shell"}
+```bash
+cargo run -p argus-cli -- spawn shell
 ```
 
-See [DESIGN.md](DESIGN.md#the-wire-protocol) for the framing and
-`crates/protocol` for every request and reply.
+```bash
+cargo run -p argus-cli -- list
+```
+
+```text
+ID        AGENT  STATUS     FOR  PID    RULE
+c91c1b08  shell  NEEDS YOU  2s   17776  confirm-prompt
+ecec9277  shell  working    3s   28056  busy
+496b768b  shell  idle       5s   27032  powershell-prompt
+```
+
+The most urgent session is always at the top. The rest of the commands, with
+ids accepted by any unique prefix:
+
+| Command | Does |
+|---|---|
+| `screen <id>` | Show the session's screen exactly as you would see it |
+| `send <id> <text...>` | Type into it and press Enter (`--no-enter`, or `--key escape` to send a key) |
+| `resize <id> <cols> <rows>` | Change its terminal size |
+| `kill <id>` | Stop it |
+
+Add `--json` to any command for the engine's raw reply. Exit codes are 0 for
+success, 1 if the engine refused, 2 for bad usage, and 3 if no engine is
+running.
+
+The protocol underneath is plain length-prefixed JSON, so anything that can open
+a named pipe can drive the engine; see
+[DESIGN.md](DESIGN.md#the-wire-protocol).
 
 To watch a single session's status in-process, without the engine:
 

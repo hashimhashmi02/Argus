@@ -57,6 +57,7 @@
 //! ```
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use argus_manifest::Agent;
@@ -123,11 +124,16 @@ impl Session {
         let (bytes_rx, _reader_thread) = reader::spawn_reader(spawned.reader);
         let (command_tx, command_rx) = mpsc::channel(COMMAND_DEPTH);
 
-        let session_task = task::SessionTask::new(agent, config, spawned.process, snapshot_tx);
+        // Read once and shared, so the task's `since` and the handle's `age` are
+        // measured from the same instant. See `SessionHandle::status_age`.
+        let started = Instant::now();
+
+        let session_task =
+            task::SessionTask::new(agent, config, spawned.process, snapshot_tx, started);
         let task = tokio::spawn(session_task.run(bytes_rx, command_rx));
 
         Ok(Self {
-            handle: SessionHandle::new(command_tx, snapshot_rx),
+            handle: SessionHandle::new(command_tx, snapshot_rx, started),
             task,
         })
     }

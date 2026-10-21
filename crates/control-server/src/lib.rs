@@ -51,6 +51,28 @@ pub fn default_pipe_name() -> String {
     format!(r"\\.\pipe\argus-{}", sanitise(&user))
 }
 
+/// The local pipe prefix: every named pipe on this machine lives under it.
+const LOCAL_PIPE_PREFIX: &str = r"\\.\pipe\";
+
+/// Turn a user-supplied pipe name into a full pipe path.
+///
+/// Accepts a bare name -- `argus-test` -- and supplies the `\\.\pipe\` prefix.
+/// A full path is passed through untouched.
+///
+/// This exists because typing the prefix on a command line does not reliably
+/// survive the trip. Git Bash in particular rewrites `\\.\pipe\name` somewhere
+/// between the prompt and the process, and the program receives a path that
+/// does not exist -- so `argus-cli --pipe '\\.\pipe\x' list` failed with "path
+/// not found" instead of "engine not running", depending purely on which shell
+/// ran it. A bare name has no backslashes for any shell to mangle.
+pub fn pipe_path(name: &str) -> String {
+    if name.starts_with(r"\\") {
+        name.to_string()
+    } else {
+        format!("{LOCAL_PIPE_PREFIX}{name}")
+    }
+}
+
 /// A unique pipe name for tests, so parallel test binaries never collide.
 pub fn unique_pipe_name(label: &str) -> String {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -77,4 +99,25 @@ fn sanitise(component: &str) -> String {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_bare_name_gets_the_local_pipe_prefix() {
+        assert_eq!(pipe_path("argus-test"), r"\\.\pipe\argus-test");
+    }
+
+    #[test]
+    fn a_full_path_is_left_alone() {
+        assert_eq!(pipe_path(r"\\.\pipe\argus-test"), r"\\.\pipe\argus-test");
+    }
+
+    #[test]
+    fn the_default_name_is_already_a_full_path() {
+        assert!(default_pipe_name().starts_with(LOCAL_PIPE_PREFIX));
+        assert_eq!(pipe_path(&default_pipe_name()), default_pipe_name());
+    }
 }

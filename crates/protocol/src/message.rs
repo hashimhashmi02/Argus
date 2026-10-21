@@ -134,6 +134,19 @@ pub struct SessionInfo {
     /// render "idle for 3m", and it sidesteps every question about clock skew
     /// and time zones between processes.
     pub since_ms: u64,
+    /// How long the session has held its current status, in milliseconds.
+    ///
+    /// Computed by the engine at the moment of the reply, because a client
+    /// cannot: it knows `since_ms` relative to spawn, but not how long ago spawn
+    /// was. And this is the number that matters -- "needs you *for four
+    /// minutes*" is what tells someone which window to look at first.
+    ///
+    /// Added after v1 shipped, and deliberately without a version bump. An
+    /// older client ignores the unknown field, and a newer client talking to an
+    /// older engine reads the `serde(default)` zero. Neither side misreads
+    /// anything, which is the test for whether a change needs a bump.
+    #[serde(default)]
+    pub status_for_ms: u64,
     /// The manifest rule responsible for the current status, if the screen
     /// decided it.
     #[serde(default, skip_serializing_if = "Option::is_none")]

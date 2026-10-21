@@ -43,6 +43,7 @@ fn fake(id: &str) -> SessionInfo {
         agent: "stub".into(),
         status: Status::Idle,
         since_ms: 0,
+        status_for_ms: 0,
         rule: None,
         pid: None,
         exit_code: None,

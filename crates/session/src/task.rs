@@ -51,15 +51,20 @@ pub(crate) struct SessionTask {
 }
 
 impl SessionTask {
+    /// `start` is passed in rather than read here so that the task and every
+    /// `SessionHandle` measure from the *same* instant. `since` is a duration
+    /// from `start`, and a handle computes "how long in this status" as its age
+    /// minus `since`; two separately-read clocks would make that subtraction
+    /// off by however long it took to get from one read to the other.
     pub(crate) fn new(
         agent: Arc<Agent>,
         config: SessionConfig,
         process: ConPtyProcess,
         snapshot: watch::Sender<SessionSnapshot>,
+        start: Instant,
     ) -> Self {
         let policy = agent.manifest().timing.apply(Policy::default());
         let emulator = TerminalEmulator::new(config.cols, config.rows);
-        let start = Instant::now();
 
         Self {
             agent,

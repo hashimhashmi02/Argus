@@ -41,6 +41,7 @@ serde_json = "1"
 regex = "1"
 thiserror = "2"
 tokio = { version = "1", default-features = false }
+clap = { version = "4", features = ["derive"] }
 
 [profile.release]
 # Argus is a long-lived daemon holding PTY handles. A panic that unwinds

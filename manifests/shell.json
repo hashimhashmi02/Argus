@@ -14,23 +14,30 @@
     {
       "name": "confirm-prompt",
       "status": "needs_you",
-      "pattern": "(?im)\\[Y\\] Yes|\\(y/n\\)|Are you sure",
+      "pattern": "(?i)\\[Y\\] Yes|\\(y/n\\)|Are you sure",
       "priority": 100,
-      "region": { "last_lines": 4 }
+      "region": { "last_lines": 1 }
     },
     {
       "name": "powershell-prompt",
       "status": "idle",
-      "pattern": "(?m)^PS [^\\n]*> *$",
+      "pattern": "^PS [^\\n]*>\\s*$",
       "priority": 10,
-      "region": { "last_lines": 3 }
+      "region": { "last_lines": 1 }
     },
     {
       "name": "cmd-prompt",
       "status": "idle",
-      "pattern": "(?m)^[A-Za-z]:\\\\[^\\n]*> *$",
+      "pattern": "^[A-Za-z]:\\\\[^\\n]*>\\s*$",
       "priority": 10,
-      "region": { "last_lines": 3 }
+      "region": { "last_lines": 1 }
+    },
+    {
+      "name": "busy",
+      "status": "working",
+      "pattern": "\\S",
+      "priority": 1,
+      "region": { "last_lines": 1 }
     }
   ]
 }
