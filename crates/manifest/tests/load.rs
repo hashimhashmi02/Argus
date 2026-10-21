@@ -488,3 +488,123 @@ fn a_blank_screen_is_no_information_not_busy() {
     let blank = vec![String::new(); 30];
     assert_eq!(shell().classify(&blank).status, None);
 }
+
+// ---- claude-code.json against real Claude Code screens ----------------------
+//
+// Captured from Claude Code v2.1.142 running under argus-engine, read back with
+// `argus-cli screen`. These replaced rules written from guesswork: the original
+// idle rule expected a `│ >` bordered input box, and the real one is a `>` line
+// between two horizontal rules -- so an idle Claude read as working forever.
+// Likewise its spinner no longer says "esc to interrupt"; it is a glyph and a
+// verb ending in an ellipsis, like `· Manifesting…`.
+
+fn claude() -> Agent {
+    Agent::from_path(manifest_dir().join("claude-code.json")).unwrap()
+}
+
+fn rule() -> String {
+    "─".repeat(120)
+}
+
+/// The bottom of the screen as Claude Code draws it, with the spinner (or
+/// whatever else) above the input box and a two-line status line below.
+fn claude_bottom(above_input: &[&str], input: &str) -> Vec<String> {
+    let mut lines: Vec<String> = above_input.iter().map(|s| s.to_string()).collect();
+    lines.push(format!("{:>118}", "◉ xhigh · /effort"));
+    lines.push(rule());
+    lines.push(input.to_string());
+    lines.push(rule());
+    lines.push("  [CAVEMAN] ⛏  851.1k".to_string());
+    lines.push("  ← for agents".to_string());
+    // Plus the blank rows a screen that has not filled up carries beneath.
+    lines.extend(std::iter::repeat_n(String::new(), 4));
+    lines
+}
+
+#[test]
+fn claude_at_an_empty_input_box_is_idle() {
+    // `> ` with its trailing space trimmed by the emulator, as it really arrives.
+    let screen = claude_bottom(&[], ">");
+    let matched = claude().classify(&screen);
+    assert_eq!(
+        matched.status,
+        Some(Status::Idle),
+        "rule: {:?}",
+        matched.rule
+    );
+    assert_eq!(matched.rule.as_deref(), Some("input-box-idle"));
+}
+
+#[test]
+fn claude_showing_its_placeholder_hint_is_idle() {
+    let screen = claude_bottom(&[], r#"> Try "fix lint errors""#);
+    assert_eq!(claude().classify(&screen).status, Some(Status::Idle));
+}
+
+#[test]
+fn claude_with_its_spinner_up_is_working_even_though_the_input_box_shows() {
+    // The input box is drawn the whole time Claude works -- you can type ahead
+    // -- so the idle rule matches here too. Priority is what makes this right.
+    for spinner in [
+        "· Manifesting…",
+        "✻ Propagating…",
+        "* Whatchamacalliting…",
+        "✢ Scurrying…",
+    ] {
+        let screen = claude_bottom(
+            &[
+                "> Create a file named demo.txt in this folder.",
+                "  ⎿  Retrying in 1s · attempt 1/10 · API_TIMEOUT_MS=900000ms, try increasing it",
+                spinner,
+            ],
+            ">",
+        );
+        let matched = claude().classify(&screen);
+        assert_eq!(
+            matched.status,
+            Some(Status::Working),
+            "spinner {spinner:?}: {:?}",
+            matched.rule
+        );
+        assert_eq!(matched.rule.as_deref(), Some("busy-spinner"));
+    }
+}
+
+#[test]
+fn claudes_finished_marker_is_not_mistaken_for_the_spinner() {
+    // When a turn ends the spinner line becomes a past-tense summary with no
+    // ellipsis. It must not keep the session "working".
+    for summary in ["✻ Churned for 2s", "✻ Cogitated for 2s", "✻ Worked for 3s"] {
+        let screen = claude_bottom(
+            &[
+                "> Create a file named demo.txt in this folder.",
+                "  ⎿  Please run /login · API Error: 401 OAuth access token has expired.",
+                summary,
+            ],
+            ">",
+        );
+        let matched = claude().classify(&screen);
+        assert_eq!(
+            matched.status,
+            Some(Status::Idle),
+            "summary {summary:?}: {:?}",
+            matched.rule
+        );
+    }
+}
+
+#[test]
+fn claudes_welcome_banner_alone_does_not_claim_anything_wrong() {
+    // The startup box is full of `│` borders and horizontal rules. None of it
+    // should read as a prompt or a spinner.
+    let mut screen: Vec<String> = [
+        "╭─── Claude Code v2.1.142 ───────────────────────────────────────╮",
+        "│                Welcome back Hashim!                │ Tips      │",
+        "│      Opus 4.7 (1M context) · Claude Pro ·          │           │",
+        "╰────────────────────────────────────────────────────────────────╯",
+    ]
+    .map(String::from)
+    .to_vec();
+    screen.extend(claude_bottom(&[], ">"));
+    assert_eq!(claude().classify(&screen).status, Some(Status::Idle));
+}

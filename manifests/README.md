@@ -91,13 +91,20 @@ lines, but keep the region as tight as the prompt allows.
 engine: idle at a prompt, working during a command, NEEDS YOU at a `(y/n)`
 question, and back to idle once answered.
 
-The rules in `claude-code.json` are still a starting point written from the
-shape of the CLI rather than from captured sessions. They are structurally
-correct but unverified, and the lessons above probably apply to them too. Check
-one with:
+`claude-code.json` is **partly** verified, against Claude Code v2.1.142 running
+under the engine:
+
+| Rule | Status |
+|---|---|
+| `input-box-idle` | Verified. The input box is a `>` line between two horizontal rules. |
+| `busy-spinner` | Verified. The spinner is a glyph and a verb ending in `…` (`· Manifesting…`); the finished-turn summary (`✻ Churned for 2s`) has no ellipsis and correctly does not match. |
+| `permission-prompt`, `trust-prompt`, `numbered-choice` | **Not yet seen live.** Reaching a permission prompt needs a logged-in `claude`, and the test session's login had expired. |
+
+The first versions of both verified rules were wrong in ways no fixture would
+have caught: the idle rule expected a `│ >` bordered box that no longer exists,
+so an idle Claude read as working forever. Treat any misclassification as a bug
+in this file first, and check against a real session:
 
 ```bash
-cargo run -p argus-cli -- spawn claude-code
+.\scripts\demo.ps1 -WithClaude
 ```
-
-Treat any misclassification as a bug in this file first.
