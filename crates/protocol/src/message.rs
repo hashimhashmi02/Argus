@@ -92,6 +92,20 @@ pub enum Request {
     /// unknown method -- rather than a misread, which is the test for whether a
     /// change needs one.
     Respond { id: String, approve: bool },
+
+    /// Follow a session's terminal: its screen as it is now, then everything
+    /// it prints.
+    ///
+    /// The one call that breaks "one request, one response". The reply is
+    /// [`Reply::Watching`], and from then on the connection carries
+    /// [`WatchEvent`] frames from the engine until the session ends or the
+    /// client hangs up. Nothing more is read from the client: a connection
+    /// that is watching is only for watching, and the client opens another
+    /// to type. Keeping the two apart means a request can never be answered
+    /// out of order behind a backlog of output.
+    ///
+    /// Additive, like `Agents`: an older engine answers `bad_request`.
+    Watch { id: String },
 }
 
 /// The answer to one request.
@@ -142,6 +156,26 @@ pub enum Reply {
     },
     /// The request was carried out and there is nothing more to say.
     Done,
+    /// The answer to [`Request::Watch`]: [`WatchEvent`] frames follow.
+    Watching,
+}
+
+/// What a watching connection receives, one frame each.
+///
+/// Text rather than bytes, because frames are JSON. The engine never splits a
+/// character between two events, so each `data` is valid UTF-8 on its own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum WatchEvent {
+    /// Clear the terminal and write this: it draws the session's screen,
+    /// colours, cursor and input modes as they are now, in a terminal of
+    /// `cols` by `rows`. Always the first event, and sent again whenever the
+    /// session is resized or the watcher fell too far behind to catch up.
+    Repaint { cols: u16, rows: u16, data: String },
+    /// The session printed this, exactly as it came from the agent.
+    Output { data: String },
+    /// The session has finished. The last event on the connection.
+    Ended,
 }
 
 /// An agent the engine can launch.

@@ -3,7 +3,8 @@ import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
 import { api, isUiError, type SessionInfo } from "./api";
 import { usePolling } from "./usePolling";
 import { blocked, layout, layoutKey, morph, reduceView, type Action, type View } from "./layout";
-import { Pane } from "./components/Pane";
+import { Pane, type TerminalHooks } from "./components/Pane";
+import type { TerminalControl } from "./components/Terminal";
 import {
   StatusLine,
   type Command,
@@ -29,6 +30,11 @@ export default function App() {
   const [message, setMessage] = useState<Message>();
   const [answered, setAnswered] = useState<Record<string, number>>({});
   const [starting, setStarting] = useState(false);
+  // The zoomed pane's live terminal: whether the keyboard is in it, and
+  // whether its prefix key is waiting for a command.
+  const [typing, setTyping] = useState(false);
+  const [prefix, setPrefix] = useState(false);
+  const terminal = useRef<TerminalControl>({ wantFocus: false });
 
   // The view (list, current pane, zoom) changes through `apply`, which runs
   // any change that moves a pane as a view transition. `viewRef` is always the
@@ -149,7 +155,21 @@ export default function App() {
           if (current) apply({ type: "zoom", id: current });
           break;
         case "unzoom":
+          blurTerminal();
           apply({ type: "unzoom" });
+          break;
+        case "type":
+          // Into the live terminal, zooming to it first if need be.
+          if (!live) break;
+          if (zoomed === currentSession.id && terminal.current.focus) {
+            terminal.current.focus();
+          } else {
+            terminal.current.wantFocus = true;
+            apply({ type: "zoom", id: currentSession.id });
+          }
+          break;
+        case "detach":
+          blurTerminal();
           break;
         case "new":
           if (!notRunning) setPrompt({ kind: "new" });
@@ -165,8 +185,53 @@ export default function App() {
           break;
       }
     },
-    [apply, current, currentSession, notRunning, startEngine],
+    [apply, current, currentSession, notRunning, startEngine, zoomed],
   );
+
+  // The key typed after the terminal's prefix (Ctrl+B), as tmux binds them.
+  const prefixCommand = (key: string) => {
+    if ((key === "y" || key === "n") && currentSession && currentBlocked) {
+      // A deliberate two-key chord, so no arming delay -- and the keyboard
+      // stays in the terminal.
+      if (!pending(currentSession)) respond(currentSession.id, key === "y");
+      return;
+    }
+    const index = Number.parseInt(key, 10);
+    if (!Number.isNaN(index) && index < list.length) {
+      blurTerminal();
+      apply({ type: "select", id: list[index].id });
+      return;
+    }
+    switch (key) {
+      case "d":
+      case "Escape":
+        run("detach");
+        break;
+      case "z":
+        run("unzoom");
+        break;
+      case "c":
+        blurTerminal();
+        run("new");
+        break;
+      case "x":
+        blurTerminal();
+        run("kill");
+        break;
+      case ":":
+        blurTerminal();
+        run("send");
+        break;
+    }
+  };
+
+  const terminalHooks: TerminalHooks = {
+    control: terminal,
+    onTyping: setTyping,
+    onPrefix: setPrefix,
+    onCommand: prefixCommand,
+    onError: fail,
+  };
 
   // The keyboard, tmux-style but without the prefix: this window has nothing
   // else to type into. Keys typed into a prompt's input never reach here.
@@ -213,8 +278,10 @@ export default function App() {
         run("new");
       } else if (e.key === "x") {
         run("kill");
-      } else if (e.key === ":" || e.key === "i") {
+      } else if (e.key === ":") {
         run("send");
+      } else if (e.key === "i") {
+        run("type");
       } else if (e.key === "s" && notRunning) {
         run("start");
       } else {
@@ -241,6 +308,7 @@ export default function App() {
       current={s.id === current}
       zoomed={s.id === zoomed}
       answered={pending(s)}
+      terminal={terminalHooks}
       onSelect={() => s.id !== viewRef.current.current && apply({ type: "select", id: s.id })}
       onToggleZoom={() => toggleZoom(s.id)}
       onRespond={(approve) => respond(s.id, approve)}
@@ -289,6 +357,8 @@ export default function App() {
         agents={agents.data ?? []}
         prompt={prompt}
         message={message}
+        typing={typing}
+        prefix={prefix}
         onSelect={(id) => apply({ type: "select", id })}
         onCommand={run}
         onCancel={() => setPrompt(undefined)}
@@ -365,7 +435,10 @@ function NoSessions({ loading, onNew }: { loading: boolean; onNew: () => void })
     ["enter", "resize-pane -Z", "zoom the current pane to the full window"],
     ["esc", "", "tile every pane again"],
     ["y n", "", "approve or deny the pane that needs you"],
-    [":", "send-keys", "type a line into the current pane"],
+    ["i", "", "type into the current pane's live terminal"],
+    ["C-b d", "detach", "stop typing, from inside the terminal"],
+    ["C-b z", "", "stop typing and tile every pane again"],
+    [":", "send-keys", "type one line into the current pane"],
     ["x", "kill-pane", "stop the current session, after asking"],
   ];
   return (
@@ -389,6 +462,12 @@ function NoSessions({ loading, onNew }: { loading: boolean; onNew: () => void })
       </p>
     </div>
   );
+}
+
+/** Take the keyboard out of the live terminal, if it is in there. */
+function blurTerminal() {
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && active.closest(".terminal-host")) active.blur();
 }
 
 function errorText(err: unknown): string {

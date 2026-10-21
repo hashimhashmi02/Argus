@@ -12,15 +12,29 @@
 //!   pressing Enter as its own keystroke -- and the UI inherits them instead of
 //!   re-learning them in TypeScript.
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use argus_control_server::{Client, ClientError};
 use argus_protocol::{AgentInfo, ErrorCode, Reply, Request, ScreenView, SessionInfo};
 use serde::Serialize;
+use serde_json::{Value, json};
 use tauri::State;
+use tauri::async_runtime::JoinHandle;
+use tauri::ipc::Channel;
 
 use crate::engine::EngineLauncher;
 
 /// Where the engine is listening.
 pub struct Pipe(pub String);
+
+/// The watches this window has running, by the number handed to the webview.
+#[derive(Default)]
+pub struct Watches {
+    next: AtomicU32,
+    running: Mutex<HashMap<u32, JoinHandle<()>>>,
+}
 
 /// An error the UI can act on, not just display.
 ///
@@ -154,6 +168,87 @@ pub async fn spawn_session(
 #[tauri::command]
 pub async fn send_line(pipe: State<'_, Pipe>, id: String, text: String) -> Result<()> {
     bounded(async { Ok(connect(&pipe).await?.send_line(&id, &text).await?) }).await
+}
+
+/// Type exactly this, as the interactive terminal's keyboard produces it:
+/// characters, escape sequences for keys, control characters.
+#[tauri::command]
+pub async fn send_text(pipe: State<'_, Pipe>, id: String, text: String) -> Result<()> {
+    call(&pipe, Request::SendText { id, text }).await?;
+    Ok(())
+}
+
+/// Change a session's terminal size, to fit the window showing it.
+#[tauri::command]
+pub async fn resize_session(pipe: State<'_, Pipe>, id: String, cols: u16, rows: u16) -> Result<()> {
+    call(&pipe, Request::Resize { id, cols, rows }).await?;
+    Ok(())
+}
+
+/// Follow a session's terminal, delivering the engine's watch events to
+/// `on_event` as they arrive. Returns a number for [`unwatch_session`].
+///
+/// Each event goes to the webview as the engine's own JSON. One more is added
+/// here: `{"event": "disconnected"}` when the stream stops without the session
+/// having ended -- the engine went away, or the pipe broke -- so the webview
+/// can tell "finished" from "lost contact" and try again.
+#[tauri::command]
+pub async fn watch_session(
+    pipe: State<'_, Pipe>,
+    watches: State<'_, Watches>,
+    id: String,
+    on_event: Channel<Value>,
+) -> Result<u32> {
+    // Only the handshake is bounded: once streaming, a quiet session can go
+    // hours between events, and that is not a failure.
+    let mut watcher = bounded(async { Ok(connect(&pipe).await?.watch(&id).await?) }).await?;
+
+    let task = tauri::async_runtime::spawn(async move {
+        let disconnected = loop {
+            match watcher.next().await {
+                Ok(Some(event)) => {
+                    let ended = matches!(event, argus_protocol::WatchEvent::Ended);
+                    let Ok(value) = serde_json::to_value(&event) else {
+                        break true;
+                    };
+                    // Fails once the webview that asked has gone: reloaded or
+                    // closed. Nobody is left to tell.
+                    if on_event.send(value).is_err() {
+                        return;
+                    }
+                    if ended {
+                        break false;
+                    }
+                }
+                Ok(None) | Err(_) => break true,
+            }
+        };
+        if disconnected {
+            let _ = on_event.send(json!({ "event": "disconnected" }));
+        }
+    });
+
+    let key = watches.next.fetch_add(1, Ordering::Relaxed);
+    watches
+        .running
+        .lock()
+        .expect("watch table poisoned")
+        .insert(key, task);
+    Ok(key)
+}
+
+/// Stop a watch. Dropping the connection is what tells the engine to stop
+/// sending. Unknown numbers are ignored: the watch may already have ended.
+#[tauri::command]
+pub fn unwatch_session(watches: State<'_, Watches>, watch: u32) {
+    let task = watches
+        .running
+        .lock()
+        .expect("watch table poisoned")
+        .remove(&watch);
+    if let Some(task) = task {
+        task.abort();
+    }
 }
 
 /// Press a named key: `enter`, `escape`, `ctrl-c`, `up`, and the rest of the

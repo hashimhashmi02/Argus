@@ -112,6 +112,43 @@ async fn spawn(pipe: &str) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn watch_prints_json_events_until_the_session_ends() {
+    let engine = start("cli-watch");
+    let id = spawn(&engine.pipe).await;
+    poll(&engine.pipe, &["screen", &id], "the prompt", |text| {
+        text.contains('>')
+    })
+    .await;
+
+    let watch = tokio::process::Command::new(env!("CARGO_BIN_EXE_argus-cli"))
+        .args(["--pipe", &engine.pipe, "--json", "watch", &id])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("argus-cli should run");
+
+    // Let it attach, then end the session from another process. If it attaches
+    // late, it is shown the finished screen instead, and must still end.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let kill = cli(&engine.pipe, &["kill", &id]).await;
+    assert!(kill.status.success(), "kill failed: {}", stderr(&kill));
+
+    let output = tokio::time::timeout(LIMIT, watch.wait_with_output())
+        .await
+        .expect("watch should exit once the session ends")
+        .unwrap();
+    assert!(output.status.success(), "watch failed: {}", stderr(&output));
+
+    let text = stdout(&output);
+    let events: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("each line is one JSON event"))
+        .collect();
+    assert_eq!(events.first().unwrap()["event"], "repaint", "{text}");
+    assert_eq!(events.last().unwrap()["event"], "ended", "{text}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn spawn_screen_send_list_and_kill() {
     let engine = start("cli-lifecycle");
     let pipe = &engine.pipe;

@@ -78,6 +78,29 @@ impl Screen {
     pub fn cursor(&self) -> (u16, u16) {
         (self.cursor_row, self.cursor_col)
     }
+
+    /// Terminal output that draws this text into a blank terminal, with the
+    /// cursor where it was.
+    ///
+    /// The plain-text cousin of [`TerminalEmulator::repaint`], for when the
+    /// emulator itself is gone -- a finished session keeps its last `Screen`,
+    /// not its terminal -- so there are no colours left to reproduce.
+    ///
+    /// [`TerminalEmulator::repaint`]: crate::TerminalEmulator::repaint
+    pub fn repaint(&self) -> String {
+        let mut out = String::from("\x1b[0m\x1b[H\x1b[2J");
+        for (row, line) in self.lines.iter().enumerate() {
+            if !line.is_empty() {
+                out.push_str(&format!("\x1b[{};1H{line}", row + 1));
+            }
+        }
+        out.push_str(&format!(
+            "\x1b[{};{}H",
+            self.cursor_row + 1,
+            self.cursor_col + 1
+        ));
+        out
+    }
 }
 
 impl fmt::Display for Screen {

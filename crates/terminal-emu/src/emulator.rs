@@ -113,6 +113,17 @@ impl TerminalEmulator {
         )
     }
 
+    /// Terminal output that turns a blank terminal of the same size into a copy
+    /// of this one: text, colours, attributes, cursor and input modes.
+    ///
+    /// For a client that starts watching partway through. It writes the
+    /// repaint, then every byte that arrives after it, and its screen matches
+    /// the session's from then on. See `repaint.rs` for what is and is not
+    /// carried over.
+    pub fn repaint(&self) -> String {
+        crate::repaint::repaint(&self.term, self.cols, self.rows)
+    }
+
     /// Tell the terminal its window changed size.
     ///
     /// Not cosmetic. A TUI lays itself out against the size it believes it has,

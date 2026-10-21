@@ -1,8 +1,19 @@
+import type { MutableRefObject } from "react";
 import { api, type SessionInfo } from "../api";
 import { paneStatus, statusClass, statusLabel } from "../format";
 import { blocked, keepFocus } from "../layout";
 import { usePolling } from "../usePolling";
 import { Screen } from "./Screen";
+import { Terminal, type TerminalControl } from "./Terminal";
+
+/** What the zoomed pane's live terminal needs from the window around it. */
+export interface TerminalHooks {
+  control: MutableRefObject<TerminalControl>;
+  onTyping: (typing: boolean) => void;
+  onPrefix: (armed: boolean) => void;
+  onCommand: (key: string) => void;
+  onError: (error: unknown) => void;
+}
 
 interface Props {
   session: SessionInfo;
@@ -11,6 +22,7 @@ interface Props {
   zoomed: boolean;
   /** An answer was sent and the engine has not reported the result yet. */
   answered: boolean;
+  terminal: TerminalHooks;
   onSelect: () => void;
   onToggleZoom: () => void;
   onRespond: (approve: boolean) => void;
@@ -29,18 +41,16 @@ const KEYS: [label: string, key: string][] = [
 /**
  * One session as a tmux pane: a border line carrying its fixed furniture
  * (index and agent, id, status and age, rule -- always in that order), then
- * its real screen. A pane that needs you gets the only bright yellow in the
+ * its screen. A pane that needs you gets the only bright yellow in the
  * window, top and bottom, because that is where you act.
+ *
+ * Tiled, the screen is a polled miniature. Zoomed, a live session becomes its
+ * real terminal, streamed and typeable.
  */
 export function Pane(props: Props) {
   const { session: s, index, current, zoomed, answered } = props;
   const dead = s.status === "done";
   const bell = blocked(s);
-
-  // The pane you are looking at is polled fastest; a dead one barely at all,
-  // since its screen can no longer change.
-  const interval = dead ? 5000 : current || zoomed ? 400 : 1000;
-  const { data: view } = usePolling(() => api.readScreen(s.id), interval, [s.id]);
 
   const classes = [
     "pane",
@@ -73,19 +83,10 @@ export function Pane(props: Props) {
         <span className="fill" />
       </header>
 
-      {view && view.cols > 0 ? (
-        <Screen view={view} cursor={current && !dead} />
-      ) : s.lost ? (
-        <p className="pane-note">
-          This session was still running when the engine last stopped, and its process went with
-          it. Its screen was not kept.
-        </p>
-      ) : dead && view ? (
-        <p className="pane-note">
-          This session ended before the engine last restarted. Its screen was not kept.
-        </p>
+      {zoomed && !dead ? (
+        <Terminal id={s.id} {...props.terminal} />
       ) : (
-        <div className="screen-fit" />
+        <PolledScreen session={s} current={current} />
       )}
 
       {zoomed && !dead && (
@@ -134,4 +135,32 @@ export function Pane(props: Props) {
       )}
     </section>
   );
+}
+
+/**
+ * The text-only screen, polled. The pane you are looking at is polled
+ * fastest; a dead one barely at all, since its screen can no longer change.
+ */
+function PolledScreen({ session: s, current }: { session: SessionInfo; current: boolean }) {
+  const dead = s.status === "done";
+  const interval = dead ? 5000 : current ? 400 : 1000;
+  const { data: view } = usePolling(() => api.readScreen(s.id), interval, [s.id]);
+
+  if (view && view.cols > 0) return <Screen view={view} cursor={current && !dead} />;
+  if (s.lost) {
+    return (
+      <p className="pane-note">
+        This session was still running when the engine last stopped, and its process went with it.
+        Its screen was not kept.
+      </p>
+    );
+  }
+  if (dead && view) {
+    return (
+      <p className="pane-note">
+        This session ended before the engine last restarted. Its screen was not kept.
+      </p>
+    );
+  }
+  return <div className="screen-fit" />;
 }

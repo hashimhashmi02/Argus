@@ -56,8 +56,15 @@ export function reduceView(view: View, action: Action): View {
     }
     case "zoom":
       return { ...view, current: action.id, zoomed: action.id };
-    case "unzoom":
-      return view.zoomed ? { ...view, zoomed: undefined } : view;
+    case "unzoom": {
+      if (!view.zoomed) return view;
+      // A bell that rang while you were zoomed elsewhere was held back, not
+      // dropped: tiling back is when it moves you, to the pane in the main tile.
+      const waiting = view.list.filter(blocked);
+      const onBlocked = waiting.some((s) => s.id === view.current);
+      const current = !onBlocked && waiting.length > 0 ? byUrgency(waiting)[0].id : view.current;
+      return { ...view, current, zoomed: undefined };
+    }
   }
 }
 

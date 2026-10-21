@@ -7,7 +7,7 @@
 
 use argus_protocol::{
     CodecError, Envelope, ErrorCode, FrameDecoder, MAX_FRAME_LEN, PROTOCOL_VERSION, Reply, Request,
-    Response, RpcError, SessionInfo, Status, encode,
+    Response, RpcError, SessionInfo, Status, WatchEvent, encode,
 };
 
 fn json<T: serde::Serialize>(value: &T) -> String {
@@ -105,6 +105,7 @@ fn every_request_round_trips() {
         },
         Request::ReadScreen { id: "a".into() },
         Request::Kill { id: "a".into() },
+        Request::Watch { id: "a".into() },
     ];
 
     for request in requests {
@@ -297,6 +298,57 @@ fn the_ui_methods_have_a_stable_shape() {
         })),
         r#"{"ok":{"kind":"agents","agents":[{"id":"shell","display_name":"Shell"}]}}"#
     );
+}
+
+#[test]
+fn watching_has_a_stable_readable_shape() {
+    assert_eq!(
+        json(&Envelope::new(Request::Watch { id: "a1".into() })),
+        r#"{"version":1,"method":"watch","id":"a1"}"#
+    );
+    assert_eq!(
+        json(&Response::Ok(Reply::Watching)),
+        r#"{"ok":{"kind":"watching"}}"#
+    );
+
+    // Terminal output travels as JSON text, escape sequences and all.
+    assert_eq!(
+        json(&WatchEvent::Repaint {
+            cols: 120,
+            rows: 30,
+            data: "\u{1b}[H\u{1b}[2J>".into()
+        }),
+        r#"{"event":"repaint","cols":120,"rows":30,"data":"\u001b[H\u001b[2J>"}"#
+    );
+    assert_eq!(
+        json(&WatchEvent::Output {
+            data: "日本\r\n".into()
+        }),
+        r#"{"event":"output","data":"日本\r\n"}"#
+    );
+    assert_eq!(json(&WatchEvent::Ended), r#"{"event":"ended"}"#);
+}
+
+#[test]
+fn watch_events_round_trip_through_frames() {
+    let events = [
+        WatchEvent::Repaint {
+            cols: 80,
+            rows: 24,
+            data: "\u{1b}[0m\u{1b}[31mred".into(),
+        },
+        WatchEvent::Output {
+            data: "more\u{1b}[?25l".into(),
+        },
+        WatchEvent::Ended,
+    ];
+    let mut decoder = FrameDecoder::new();
+    for event in &events {
+        decoder.push(&encode(event).unwrap());
+    }
+    for event in events {
+        assert_eq!(decoder.next_frame::<WatchEvent>().unwrap(), Some(event));
+    }
 }
 
 #[test]

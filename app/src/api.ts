@@ -5,7 +5,7 @@
 // that is what serde sends. If they drift, the place to look is
 // crates/protocol/src/message.rs, which is the source of truth.
 
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 
 export type Status = "idle" | "working" | "needs_you" | "done";
 
@@ -36,6 +36,17 @@ export interface AgentInfo {
   display_name: string;
 }
 
+/**
+ * What a watch delivers: the engine's events (argus-protocol's `WatchEvent`),
+ * plus `disconnected`, added by the Rust side when the stream stops without
+ * the session having ended.
+ */
+export type WatchMessage =
+  | { event: "repaint"; cols: number; rows: number; data: string }
+  | { event: "output"; data: string }
+  | { event: "ended" }
+  | { event: "disconnected" };
+
 /** What a failed command rejects with. `kind` says what the UI should do. */
 export interface UiError {
   kind: "not_running" | "rpc" | "other";
@@ -53,7 +64,17 @@ export const api = {
   readScreen: (id: string) => invoke<ScreenView>("read_screen", { id }),
   spawn: (agent: string, cwd?: string) => invoke<SessionInfo>("spawn_session", { agent, cwd }),
   sendLine: (id: string, text: string) => invoke<void>("send_line", { id, text }),
+  sendText: (id: string, text: string) => invoke<void>("send_text", { id, text }),
   sendKey: (id: string, key: string) => invoke<void>("send_key", { id, key }),
+  resize: (id: string, cols: number, rows: number) =>
+    invoke<void>("resize_session", { id, cols, rows }),
+  /** Start a watch; resolves to the number `unwatch` takes. */
+  watch: (id: string, onMessage: (message: WatchMessage) => void) => {
+    const onEvent = new Channel<WatchMessage>();
+    onEvent.onmessage = onMessage;
+    return invoke<number>("watch_session", { id, onEvent });
+  },
+  unwatch: (watch: number) => invoke<void>("unwatch_session", { watch }),
   respond: (id: string, approve: boolean) => invoke<void>("respond", { id, approve }),
   kill: (id: string) => invoke<void>("kill_session", { id }),
   startEngine: () => invoke<void>("start_engine"),

@@ -5,8 +5,9 @@
 //! without any agent noticing. If the engine is not running, the UI offers to
 //! start it -- detached, so it keeps running after the UI is gone.
 //!
-//! The webview polls rather than being pushed to. The protocol has no
-//! subscription yet; that arrives with the interactive terminal in step 8b.
+//! The webview polls for the session list and the tiled screens. The one pane
+//! you are working in is streamed instead: a `watch` connection per zoomed
+//! session, its events passed to the webview over a Tauri channel.
 
 // No console window behind the app in release builds. Debug builds keep one,
 // which is where Rust panics and logs show up during development.
@@ -29,6 +30,7 @@ fn main() {
 
     tauri::Builder::default()
         .manage(commands::Pipe(pipe))
+        .manage(commands::Watches::default())
         .manage(launcher)
         .invoke_handler(tauri::generate_handler![
             commands::list_sessions,
@@ -36,9 +38,13 @@ fn main() {
             commands::read_screen,
             commands::spawn_session,
             commands::send_line,
+            commands::send_text,
             commands::send_key,
+            commands::resize_session,
             commands::respond,
             commands::kill_session,
+            commands::watch_session,
+            commands::unwatch_session,
             commands::start_engine,
         ])
         .run(tauri::generate_context!())

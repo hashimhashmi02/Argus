@@ -17,7 +17,7 @@ export interface Message {
 export type Engine = { state: "up" } | { state: "down" } | { state: "error"; message: string };
 
 /** What a hint in the status line runs when clicked: the same as its key. */
-export type Command = "zoom" | "unzoom" | "new" | "send" | "kill" | "start";
+export type Command = "zoom" | "unzoom" | "new" | "send" | "kill" | "start" | "type" | "detach";
 
 interface Props {
   list: SessionInfo[];
@@ -27,6 +27,10 @@ interface Props {
   agents: AgentInfo[];
   prompt?: Prompt;
   message?: Message;
+  /** The keyboard is in the zoomed pane's live terminal. */
+  typing: boolean;
+  /** The terminal's prefix key was pressed and is waiting for a command. */
+  prefix: boolean;
   onSelect: (id: string) => void;
   onCommand: (command: Command) => void;
   onCancel: () => void;
@@ -109,19 +113,27 @@ export function StatusLine(props: Props) {
   );
 }
 
-function Hints({ engine, list, zoomed, current, onCommand }: Props) {
+function Hints({ engine, list, zoomed, current, typing, prefix, onCommand }: Props) {
   const hints: [key: string, label: string, command: Command][] = [];
   const live = list.some((s) => s.id === current && s.status !== "done");
   if (engine.state === "down") {
     hints.push(["s", "start engine", "start"]);
+  } else if (typing) {
+    // Every key goes to the agent now, so only the prefix gets out.
+    hints.push(["C-b d", "stop typing", "detach"], ["C-b z", "tile", "unzoom"]);
   } else {
     if (zoomed) hints.push(["esc", "tile", "unzoom"]);
     else if (current) hints.push(["enter", "zoom", "zoom"]);
+    if (live) hints.push(["i", "type", "type"]);
     hints.push(["c", "new", "new"]);
     if (live) hints.push([":", "send", "send"], ["x", "kill", "kill"]);
   }
   return (
     <span className="hints">
+      {/* tmux shows nothing for a waiting prefix; here it is said, in the
+          colour of a key that wants pressing. */}
+      {prefix && <span className="prefix">^B</span>}
+      {typing && !prefix && <span className="typing">typing</span>}
       {hints.map(([key, label, command]) => (
         <button
           type="button"

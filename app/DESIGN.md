@@ -189,11 +189,13 @@ The tmux status row: `[argus]`, the window list, contextual key hints, the engin
 - **Window list:** `index:agent` plus tmux flags — `*` current, `Z` zoomed, `!` bell (needs you), `#` activity (working), `~` silence (idle); a finished session carries none. A bell entry is reversed again into a black notch with bold Bell Yellow text.
 - **As a prompt:** the whole row turns Bell Yellow and becomes the question — `send-keys -t 0:shell` with an input, `kill-pane 1:shell 1a2b3c4d? (y/n)`, or `new-window` with the agents as a radio row (the chosen one in a black notch) and `-c` for the working directory. Hints name keys in words (`enter`, `esc`, `up/down`), as tmux does.
 - **As a message:** a black row in Bright White (or Exit Red for an error) for six seconds, or until clicked.
+- **While typing in a live terminal:** the hints become `typing · C-b d stop typing · C-b z tile`, since every other key now belongs to the agent. A pressed prefix shows as a `^B` notch, black with bold Bell Yellow, because the next key is a command waiting to be given.
 - **Hover:** underline with a 0.2em offset. **Focus:** 1px black outline.
 
 ### Pane
 - **Border line:** a 20px row of segments joined by 1ch rules and ended by a rule to the edge. Inactive: Rule Grey. Current: Active Green. Finished: dashed. Needs you: the whole row is a Bell Yellow band in black text with a bold name.
-- **Screen:** the fitted grid, the cursor drawn as a reverse-video cell in the current pane only.
+- **Screen (tiled):** the fitted grid, the cursor drawn as a reverse-video cell in the current pane only.
+- **Terminal (zoomed, live):** the agent's real terminal in xterm.js, 14px Cascadia Mono on the Campbell theme, so the agent's own colours sit in the same palette as the chrome. Agent output keeps whatever colours the agent chose, yellow included: that is the agent's screen, not Argus's chrome, and the Bell Rule governs the chrome. The cursor is a solid block while you type and an outline when the keyboard is elsewhere, which is the cue for whether keys go to the agent.
 - **Footers:** a pane that needs you ends in a Bell Yellow row, `approve? y n`, whose answer keys are black notches with bold yellow letters; once answered it reads `answer sent, waiting for <agent>` until the engine reports a new status. A zoomed live pane adds a `send-keys` row above it: `Enter Escape C-c Up Down`, reversing to Terminal White on hover.
 
 ### Notices

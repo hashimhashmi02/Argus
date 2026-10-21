@@ -7,11 +7,12 @@ use argus_manifest::Agent;
 use argus_pty::{ConPtyProcess, PtyProcess};
 use argus_reducer::{HookSignal, Policy, ScreenMatch, SessionState, Status, Timestamp, reduce};
 use argus_terminal_emu::TerminalEmulator;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 
 use crate::config::SessionConfig;
 use crate::handle::Command;
 use crate::snapshot::SessionSnapshot;
+use crate::stream::{Repaint, STREAM_DEPTH, StreamItem, Utf8Chunks, Watch};
 
 pub(crate) struct SessionTask {
     agent: Arc<Agent>,
@@ -48,6 +49,14 @@ pub(crate) struct SessionTask {
     snapshot: watch::Sender<SessionSnapshot>,
     /// Last published screen, so a repaint is only sent when something changed.
     last_screen: String,
+
+    /// Raw output for watchers. Dropped with the task, which is how a watcher
+    /// learns the session has finished.
+    output: broadcast::Sender<StreamItem>,
+    /// Kept up to date even with nobody watching: a watcher that arrives
+    /// between the two halves of a character needs the first half to come
+    /// through in front of the second.
+    utf8: Utf8Chunks,
 }
 
 impl SessionTask {
@@ -78,6 +87,8 @@ impl SessionTask {
             exit_code: None,
             snapshot,
             last_screen: String::new(),
+            output: broadcast::channel(STREAM_DEPTH).0,
+            utf8: Utf8Chunks::default(),
             config,
         }
     }
@@ -161,6 +172,14 @@ impl SessionTask {
             self.write_now(&reply);
         }
 
+        let text = self.utf8.push(chunk);
+        if !text.is_empty() && self.output.receiver_count() > 0 {
+            // A send only fails when nobody is subscribed, which was just
+            // checked; and if the last watcher left in between, there is
+            // nobody to tell.
+            let _ = self.output.send(StreamItem::Output(text.into()));
+        }
+
         if !self.ready {
             self.ready = true;
             if !self.pending_input.is_empty() {
@@ -190,6 +209,22 @@ impl SessionTask {
                 if let Some(process) = self.process.as_mut() {
                     let _ = process.resize(cols, rows);
                 }
+                // The emulator has reflowed its grid, so a watcher drawing at
+                // the old size no longer matches it. The child redraws for the
+                // new size on its own; this only gets watchers to where the
+                // emulator is now, so that redraw lands where it should.
+                if self.output.receiver_count() > 0 {
+                    let _ = self.output.send(StreamItem::Repaint(self.repaint()));
+                }
+            }
+
+            // Subscribing here, between two reads from the child, is what
+            // makes the repaint and the stream line up exactly. See `Watch`.
+            Command::Watch(reply) => {
+                let _ = reply.send(Watch {
+                    repaint: self.repaint(),
+                    stream: self.output.subscribe(),
+                });
             }
 
             // Evidence from the agent itself, handed straight to the reducer on
@@ -201,6 +236,15 @@ impl SessionTask {
                     let _ = process.kill();
                 }
             }
+        }
+    }
+
+    fn repaint(&self) -> Repaint {
+        let (cols, rows) = self.emulator.size();
+        Repaint {
+            cols,
+            rows,
+            data: self.emulator.repaint().into(),
         }
     }
 

@@ -483,6 +483,32 @@ button {
   font-weight: 700;
 }
 
+/* The prefix key is waiting: the next key is a command, so it wants pressing. */
+.prefix {
+  padding: 0 1ch;
+  background: var(--black);
+  color: var(--bright-yellow);
+  font-weight: 700;
+}
+
+.typing {
+  padding: 0 1ch;
+  font-weight: 700;
+}
+
+/* ---- The live terminal ---------------------------------------------------- */
+
+.terminal-host {
+  flex: 1 1 0;
+  min-height: 0;
+  padding: 2px 0 0 1ch;
+  overflow: hidden;
+}
+
+.terminal-host .xterm {
+  height: 100%;
+}
+
 .engine.is-down {
   background: var(--black);
   color: var(--bright-red);

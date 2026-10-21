@@ -4,7 +4,8 @@ use std::io;
 use std::time::Duration;
 
 use argus_protocol::{
-    CodecError, Envelope, FrameDecoder, Reply, Request, Response, RpcError, encode,
+    CodecError, Envelope, ErrorCode, FrameDecoder, Reply, Request, Response, RpcError, WatchEvent,
+    encode,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
@@ -100,15 +101,9 @@ impl Client {
         let frame = encode(&Envelope::new(request))?;
         self.pipe.write_all(&frame).await?;
 
-        loop {
-            if let Some(response) = self.decoder.next_frame::<Response>()? {
-                return Result::<Reply, RpcError>::from(response).map_err(ClientError::Rpc);
-            }
-            let n = self.pipe.read(&mut self.buf).await?;
-            if n == 0 {
-                return Err(ClientError::Closed);
-            }
-            self.decoder.push(&self.buf[..n]);
+        match self.next_frame::<Response>().await? {
+            Some(response) => Result::<Reply, RpcError>::from(response).map_err(ClientError::Rpc),
+            None => Err(ClientError::Closed),
         }
     }
 
@@ -137,5 +132,54 @@ impl Client {
         })
         .await?;
         Ok(())
+    }
+
+    /// Start following a session's terminal.
+    ///
+    /// Takes the client by value: once the engine starts streaming, this
+    /// connection carries nothing else. Open another `Client` to type into the
+    /// session.
+    pub async fn watch(mut self, id: &str) -> Result<Watcher, ClientError> {
+        match self.call(Request::Watch { id: id.to_string() }).await? {
+            Reply::Watching => Ok(Watcher { client: self }),
+            other => Err(ClientError::Rpc(RpcError::new(
+                ErrorCode::Internal,
+                format!("the engine answered `watch` with {other:?}"),
+            ))),
+        }
+    }
+
+    /// The next complete frame, reading as much as it takes. `None` when the
+    /// engine closes the connection between frames.
+    async fn next_frame<T: serde::de::DeserializeOwned>(
+        &mut self,
+    ) -> Result<Option<T>, ClientError> {
+        loop {
+            if let Some(frame) = self.decoder.next_frame::<T>()? {
+                return Ok(Some(frame));
+            }
+            let n = self.pipe.read(&mut self.buf).await?;
+            if n == 0 {
+                return Ok(None);
+            }
+            self.decoder.push(&self.buf[..n]);
+        }
+    }
+}
+
+/// A connection that is following a session. See [`Client::watch`].
+///
+/// Dropping it hangs up, which is how the engine learns to stop sending.
+pub struct Watcher {
+    client: Client,
+}
+
+impl Watcher {
+    /// The next event, waiting as long as the session stays quiet.
+    ///
+    /// `None` once the engine has closed the stream, which it does straight
+    /// after [`WatchEvent::Ended`].
+    pub async fn next(&mut self) -> Result<Option<WatchEvent>, ClientError> {
+        self.client.next_frame().await
     }
 }

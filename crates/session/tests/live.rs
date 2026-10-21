@@ -17,7 +17,9 @@ use std::time::Duration;
 
 use argus_manifest::Agent;
 use argus_reducer::{HookSignal, Status};
-use argus_session::{Session, SessionConfig, SessionHandle, SessionSnapshot};
+use argus_session::{Session, SessionConfig, SessionHandle, SessionSnapshot, StreamItem, Watch};
+use argus_terminal_emu::TerminalEmulator;
+use tokio::sync::broadcast::error::RecvError;
 
 /// Generous: CI machines are slow and a false failure here is worse than a slow
 /// test.
@@ -299,4 +301,113 @@ async fn status_age_measures_time_in_the_current_status_not_since_spawn() {
     );
 
     assert!(handle.kill().await);
+}
+
+/// The next stream item, or a failure naming what was expected.
+async fn next_item(
+    stream: &mut tokio::sync::broadcast::Receiver<StreamItem>,
+    what: &str,
+) -> Result<StreamItem, RecvError> {
+    tokio::time::timeout(LIMIT, stream.recv())
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_watcher_rebuilds_the_exact_screen_from_its_repaint_and_stream() {
+    // The contract `watch` exists for: a terminal that starts from the repaint
+    // and is fed every streamed byte ends up showing exactly what the session
+    // shows. Checked against a fresh emulator, which is what a client is.
+    let session = Session::spawn(shell_agent(), SessionConfig::default()).unwrap();
+    let mut handle = session.handle();
+    wait_for(&mut handle, "the first prompt", |s| {
+        s.status == Status::Idle
+    })
+    .await;
+
+    let Watch {
+        repaint,
+        mut stream,
+    } = handle.watch().await.expect("a live session can be watched");
+    let mut copy = TerminalEmulator::new(repaint.cols, repaint.rows);
+    let _ = copy.advance(repaint.data.as_bytes());
+    assert_eq!(copy.screen(), handle.snapshot().screen, "the repaint alone");
+
+    // `%OS%` expands, so the output differs from the typed command and can only
+    // have come from the shell, not from its echo of what was typed.
+    assert!(handle.send_text("echo watched-%OS%\r").await);
+    while !copy.screen().text().contains("watched-Windows_NT") {
+        match next_item(&mut stream, "the command's output").await {
+            Ok(StreamItem::Output(text)) => {
+                let _ = copy.advance(text.as_bytes());
+            }
+            other => panic!("expected output, got {other:?}"),
+        }
+    }
+
+    // Once the shell is quiet again, the copy must have caught up completely.
+    wait_for(&mut handle, "the prompt after the command", |s| {
+        s.status == Status::Idle && s.screen.text().contains("watched-Windows_NT")
+    })
+    .await;
+    while let Ok(Ok(StreamItem::Output(text))) =
+        tokio::time::timeout(Duration::from_millis(300), stream.recv()).await
+    {
+        let _ = copy.advance(text.as_bytes());
+    }
+    assert_eq!(copy.screen(), handle.snapshot().screen, "after the stream");
+
+    assert!(handle.kill().await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_resize_sends_watchers_a_fresh_repaint() {
+    let session = Session::spawn(shell_agent(), SessionConfig::default()).unwrap();
+    let mut handle = session.handle();
+    wait_for(&mut handle, "the first prompt", |s| {
+        s.status == Status::Idle
+    })
+    .await;
+
+    let mut stream = handle.watch().await.unwrap().stream;
+    assert!(handle.resize(100, 20).await);
+    loop {
+        match next_item(&mut stream, "the repaint").await {
+            Ok(StreamItem::Repaint(repaint)) => {
+                assert_eq!((repaint.cols, repaint.rows), (100, 20));
+                break;
+            }
+            // The shell may redraw before or after; either is fine.
+            Ok(StreamItem::Output(_)) => continue,
+            Err(error) => panic!("stream failed: {error}"),
+        }
+    }
+
+    assert!(handle.kill().await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_finished_session_closes_its_stream_and_cannot_be_watched() {
+    let session = Session::spawn(shell_agent(), SessionConfig::default()).unwrap();
+    let mut handle = session.handle();
+    wait_for(&mut handle, "the first prompt", |s| {
+        s.status == Status::Idle
+    })
+    .await;
+
+    let mut stream = handle.watch().await.unwrap().stream;
+    assert!(handle.kill().await);
+    loop {
+        match next_item(&mut stream, "the stream to close").await {
+            Ok(_) => continue,
+            Err(RecvError::Closed) => break,
+            Err(error) => panic!("unexpected stream error: {error}"),
+        }
+    }
+
+    tokio::time::timeout(LIMIT, session.wait())
+        .await
+        .expect("session should finish")
+        .unwrap();
+    assert!(handle.watch().await.is_none(), "nothing left to watch");
 }
