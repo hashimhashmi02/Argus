@@ -3,9 +3,10 @@
 use std::time::{Duration, Instant};
 
 use argus_reducer::{HookSignal, Status};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::snapshot::SessionSnapshot;
+use crate::stream::Watch;
 
 /// Something for the session task to do.
 #[derive(Debug)]
@@ -19,6 +20,9 @@ pub(crate) enum Command {
     /// An out-of-band signal from the agent itself.
     Hook(HookSignal),
     Kill,
+    /// Start watching: reply with a repaint and a stream that begins where it
+    /// ends.
+    Watch(oneshot::Sender<Watch>),
 }
 
 /// A cheap, cloneable handle to a running session.
@@ -137,6 +141,21 @@ impl SessionHandle {
     /// Kill the child.
     pub async fn kill(&self) -> bool {
         self.commands.send(Command::Kill).await.is_ok()
+    }
+
+    /// Follow the terminal itself: a repaint of the screen as it is now, then
+    /// every byte of output after it.
+    ///
+    /// For a client that shows the agent's real terminal rather than its
+    /// status. `None` once the session has finished; its last screen is still
+    /// in [`snapshot`](Self::snapshot), as text.
+    ///
+    /// Asked of the session task rather than read from the snapshot, because
+    /// the two halves have to be taken at the same instant -- see [`Watch`].
+    pub async fn watch(&self) -> Option<Watch> {
+        let (reply, answer) = oneshot::channel();
+        self.commands.send(Command::Watch(reply)).await.ok()?;
+        answer.await.ok()
     }
 
     /// Whether the session task is still running.

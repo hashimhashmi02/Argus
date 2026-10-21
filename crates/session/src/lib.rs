@@ -68,11 +68,13 @@ mod config;
 mod handle;
 mod reader;
 mod snapshot;
+mod stream;
 mod task;
 
 pub use config::SessionConfig;
 pub use handle::SessionHandle;
 pub use snapshot::SessionSnapshot;
+pub use stream::{Repaint, STREAM_DEPTH, StreamItem, Watch};
 
 /// How many commands may be queued before a caller is made to wait.
 ///
