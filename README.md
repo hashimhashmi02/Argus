@@ -9,10 +9,10 @@ and which is **done**.
 
 Windows-native, written in Rust, built on [ConPTY](https://devblogs.microsoft.com/commandline/windows-command-line-introducing-the-windows-pseudo-console-conpty/).
 
-> **Status: early.** Step 8a. The engine runs as a daemon, a desktop app and
-> `argus-cli` both drive it, and the session list survives an engine restart.
-> The app tiles every agent's screen read-only; a fully interactive terminal is
-> step 8b.
+> **Status: early.** Step 8b, the last of the first build order. The engine runs
+> as a daemon, a desktop app and `argus-cli` both drive it, and the session list
+> survives an engine restart. The app tiles every agent's screen, and a zoomed
+> pane is the agent's real terminal, live and typeable.
 > See [DESIGN.md](DESIGN.md) for the architecture and the build order.
 
 ## Why
@@ -50,9 +50,24 @@ and the status line along the bottom flags each one: `!` needs you, `#` working,
 | `0`–`9`, arrows | Pick a pane |
 | `Enter` / `Esc` | Zoom the pane to the full window / tile every pane again |
 | `y` / `n` | Approve or deny the pane that needs you |
-| `:` | Type a line into the pane |
+| `i` | Type into the pane's live terminal, zooming to it first |
+| `:` | Type one line into the pane |
 | `c` | Start a new session |
 | `x` | Kill the pane's session, after asking |
+
+A zoomed pane is the agent's real terminal, in full colour. Press `i` or click
+it, and everything you type goes to the agent, Esc and Ctrl+C included. To get
+back out, use the tmux prefix, Ctrl+B, followed by a command key:
+
+| After Ctrl+B | Does |
+|---|---|
+| `d` | Stop typing |
+| `z` | Stop typing and tile every pane again |
+| `y` / `n` | Answer the pane that needs you |
+| `0`–`9` | Pick a pane |
+| Ctrl+B | Send a real Ctrl+B to the agent |
+
+With text selected in the terminal, Ctrl+C copies it, and Ctrl+V pastes.
 
 Everything also works with the mouse: click a pane or its status-line entry,
 double-click to zoom, and click `y` / `n` in a waiting pane.
@@ -102,6 +117,7 @@ ids accepted by any unique prefix:
 | `screen <id>` | Show the session's screen exactly as you would see it |
 | `send <id> <text...>` | Type into it and press Enter (`--no-enter`, or `--key escape` to send a key) |
 | `resize <id> <cols> <rows>` | Change its terminal size |
+| `watch <id>` | Mirror its terminal here, live and in colour, read-only, until it ends or Ctrl+C |
 | `kill <id>` | Stop it |
 
 Add `--json` to any command for the engine's raw reply. Exit codes are 0 for

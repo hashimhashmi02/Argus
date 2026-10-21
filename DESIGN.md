@@ -375,6 +375,59 @@ The JSON is deliberately readable — `{"version":1,"method":"list"}` — so it 
 be written by hand from any language. Step 5 was verified that way, from
 PowerShell on .NET's `NamedPipeClientStream` with the framing done by hand.
 
+### Watching a session
+
+`watch` is the one call that streams, added in step 8b for the interactive
+terminal. The engine answers `watching` and then sends event frames on that
+connection until the session ends or the client hangs up:
+
+```text
+{"event":"repaint","cols":120,"rows":30,"data":"\u001b[0m...\u001b[3;12H"}
+{"event":"output","data":"Reply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\n"}
+{"event":"ended"}
+```
+
+A watching connection is only for watching; the client opens another to type.
+Mixing the two would let a request's answer queue behind a backlog of output.
+
+**A client that arrives late needs a starting point.** The bytes that drew the
+current screen were sent long ago, to nobody. So a watch starts with a
+*repaint*: terminal output, generated from the emulator's grid, that turns a
+blank terminal into a copy of the session's. It reproduces the colours and
+attributes, and two things that are easy to forget:
+
+- **The cursor's pen.** This is a colour that has been set but not used yet.
+  Without it, the agent's next words come out in the wrong colour.
+- **The input modes.** An agent that switched on application cursor keys
+  expects Up as `ESC O A`. A client that never saw the switch would keep
+  sending `ESC [ A`.
+
+The tests check this by feeding a repaint into a fresh emulator and requiring
+the copy's own repaint to match the original's. That covers everything the
+screen text cannot show.
+
+**The repaint and the stream must meet exactly.** Both are taken inside the
+session task, between two reads from the child, so no byte is lost between them
+and none arrives twice. The stream carries text, and a read can end in the
+middle of a character, so each read's unfinished tail is held back and joined to
+the next. That happens even when nobody is watching: a watcher who arrives
+between the two halves of a character needs the first half too.
+
+**A slow client gets a fresh start, not a backlog.** Only a small queue of events
+waits for each client. When it is full, the engine stops reading the session's
+broadcast for that client, which then falls behind and is told it lagged. The
+engine watches again for it, which starts from a new repaint. Output that has
+already scrolled away is not worth replaying.
+
+**A client that leaves is noticed even when the session is silent.** The server
+reads the watching connection while it streams, purely to see it close. Without
+that read, a client that left an idle agent would only be discovered at the next
+write, which could be hours away.
+
+Not reproduced by a repaint: the scroll region, saved cursor and character set.
+A TUI relying on a scroll region it set before the watcher arrived may draw a
+few lines in the wrong place until its next full redraw.
+
 ### Session ids
 
 Eight hex characters, accepted by any unique prefix the way git accepts a short
@@ -468,6 +521,32 @@ agent; tiling every screen means the screen itself is what you glance at. The
 visual system — palette, type, the rule that yellow appears only where you can
 act — is recorded in [app/DESIGN.md](app/DESIGN.md).
 
+**The zoomed pane is the real terminal.** Tiles poll the text-only screen,
+which is enough for a glance. A zoomed live session is shown in xterm.js,
+started from the engine's `watch`: it gets every byte the agent prints, in full
+colour, and everything typed there goes straight to the agent. Its events reach
+the webview over a Tauri channel. The Rust side adds one event of its own,
+`disconnected`, for a stream that stopped without the session ending, so the
+webview can tell "finished" from "lost contact" and try again.
+
+Three details shape it:
+
+- **The session's terminal is resized to fit the pane,** as tmux sizes a window
+  to its client. The tiles then show it at that size, scaled down.
+- **Keystrokes are sent strictly one at a time.** Each one is an engine call, and
+  two calls in flight together could arrive in the wrong order. Text typed
+  while one call is in flight is queued and sent together. Anything containing
+  a control character is sent on its own, so a TUI never reads Enter as part of
+  a paste.
+- **Getting out needs a key no agent uses.** Esc and Ctrl+C belong to the agent
+  while you type. So, as in tmux, there is a prefix: Ctrl+B, then `d` to stop
+  typing, `z` to tile back, `y` / `n` to answer, or a pane number. Ctrl+B
+  pressed twice sends a real Ctrl+B.
+
+A bell that rings while you are zoomed into another pane is held back, not
+dropped. Your keyboard stays where it was. When you tile back, the waiting
+pane becomes current, so the next `y` answers it.
+
 ### Starting the engine: Job objects
 
 When the engine is not running, the UI starts it detached. The first attempt
@@ -536,7 +615,7 @@ Each step is a working, runnable checkpoint — not a half-finished layer.
 | 6 | `cli`: spawn / list / screen / kill against the running engine | **done** |
 | 7 | `registry` persistence: the session list survives an engine restart | **done** |
 | 8a | `app/`: Tauri UI — every screen tiled live, approve/deny, spawn, kill | **done** |
-| 8b | `app/`: interactive terminal (xterm.js), needs a streaming `watch` RPC | next |
+| 8b | `app/`: interactive terminal (xterm.js) over a streaming `watch` RPC | **done** |
 
 The UI is last on purpose. A UI built on an unstable protocol locks in the
 mistakes of that protocol.
