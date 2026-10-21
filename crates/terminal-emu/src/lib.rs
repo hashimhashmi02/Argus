@@ -43,6 +43,7 @@
 //! ```
 
 mod emulator;
+mod repaint;
 mod screen;
 
 pub use emulator::TerminalEmulator;
