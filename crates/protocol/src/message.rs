@@ -72,6 +72,26 @@ pub enum Request {
 
     /// Stop a session's child process.
     Kill { id: String },
+
+    /// Every agent the engine can launch.
+    ///
+    /// Added for the UI, which offers a list to pick from instead of asking for
+    /// a manifest id to be typed.
+    Agents,
+
+    /// Answer the prompt a session is blocked on.
+    ///
+    /// The client says *what* -- approve or deny -- and the engine works out
+    /// *how*, from the agent's manifest. One agent approves with Enter, another
+    /// wants `y`, a third a menu choice; that knowledge lives in the manifest,
+    /// and a client hardcoding "press Enter" would be wrong for every agent that
+    /// is not the one it was tested against.
+    ///
+    /// Added after v1 without a version bump, like `Agents`. A newer client
+    /// sending either to an older engine gets a clear `bad_request` back -- an
+    /// unknown method -- rather than a misread, which is the test for whether a
+    /// change needs one.
+    Respond { id: String, approve: bool },
 }
 
 /// The answer to one request.
@@ -117,8 +137,20 @@ pub enum Reply {
     Screen {
         screen: ScreenView,
     },
+    Agents {
+        agents: Vec<AgentInfo>,
+    },
     /// The request was carried out and there is nothing more to say.
     Done,
+}
+
+/// An agent the engine can launch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentInfo {
+    /// The manifest id, which `spawn` takes.
+    pub id: String,
+    /// What a person should see.
+    pub display_name: String,
 }
 
 /// One session, summarised.

@@ -29,6 +29,7 @@ fn shell_agent() -> Agent {
           "id": "test-shell",
           "display_name": "Test Shell",
           "launch": {{ "program": {program} }},
+          "keys": {{ "approve": "enter", "deny": "ctrl-c" }},
           "rules": [
             {{
               "name": "cmd-prompt",
@@ -351,4 +352,107 @@ fn the_shipped_manifests_load_into_an_engine() {
     let ids: Vec<&str> = engine.agent_ids().collect();
     assert!(ids.contains(&"claude-code"), "got {ids:?}");
     assert!(ids.contains(&"shell"), "got {ids:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn agents_lists_what_can_be_spawned() {
+    let engine = start("agents");
+    let mut client = Client::connect(&engine.pipe).await.unwrap();
+
+    match client.call(Request::Agents).await.unwrap() {
+        Reply::Agents { agents } => {
+            assert_eq!(agents.len(), 1);
+            assert_eq!(agents[0].id, "test-shell");
+            assert_eq!(agents[0].display_name, "Test Shell");
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn respond_sends_the_keys_from_the_agents_own_manifest() {
+    // The test manifest maps approve to Enter and deny to Ctrl+C. Type a command
+    // without pressing Enter, then let `respond` decide its fate: approving must
+    // run it, denying must cancel it. Neither key appears anywhere in the
+    // request -- the engine looked them up.
+    let engine = start("respond");
+    let mut client = Client::connect(&engine.pipe).await.unwrap();
+    let id = spawn_shell(&mut client).await.id;
+    poll_until(&mut client, &id, "the prompt", |v| {
+        v.session.status == Status::Idle
+    })
+    .await;
+
+    client
+        .call(Request::SendText {
+            id: id.clone(),
+            text: "echo approved-path".into(),
+        })
+        .await
+        .unwrap();
+    client
+        .call(Request::Respond {
+            id: id.clone(),
+            approve: true,
+        })
+        .await
+        .unwrap();
+    poll_until(&mut client, &id, "the approved command to run", |v| {
+        v.lines.iter().any(|line| line == "approved-path")
+    })
+    .await;
+
+    client
+        .call(Request::SendText {
+            id: id.clone(),
+            text: "echo denied-path".into(),
+        })
+        .await
+        .unwrap();
+    poll_until(&mut client, &id, "the typed text", |v| {
+        v.lines
+            .iter()
+            .any(|line| line.ends_with("echo denied-path"))
+    })
+    .await;
+    client
+        .call(Request::Respond {
+            id: id.clone(),
+            approve: false,
+        })
+        .await
+        .unwrap();
+
+    // Ctrl+C at a cmd prompt abandons the typed line and draws a fresh, bare
+    // prompt. Waiting for that bare prompt is what proves a key arrived at all:
+    // "the command never ran" alone would also be true if deny sent nothing.
+    let view = poll_until(&mut client, &id, "a fresh prompt after Ctrl+C", |v| {
+        v.lines
+            .iter()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .is_some_and(|last| last.ends_with('>'))
+    })
+    .await;
+    assert!(
+        !view.lines.iter().any(|line| line == "denied-path"),
+        "deny should have cancelled the command, not run it:\n{}",
+        view.lines.join("\n")
+    );
+
+    client.call(Request::Kill { id }).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn respond_to_an_unknown_session_is_an_unknown_session_error() {
+    let engine = start("respond-missing");
+    let mut client = Client::connect(&engine.pipe).await.unwrap();
+    let request = Request::Respond {
+        id: "deadbeef".into(),
+        approve: true,
+    };
+    assert_eq!(
+        expect_error(&mut client, request).await,
+        ErrorCode::UnknownSession
+    );
 }

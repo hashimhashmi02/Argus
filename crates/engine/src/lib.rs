@@ -19,7 +19,9 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use argus_control_server::Handler;
 use argus_manifest::Agent;
-use argus_protocol::{ErrorCode, Reply, Request, Response, RpcError, ScreenView, SessionInfo};
+use argus_protocol::{
+    AgentInfo, ErrorCode, Reply, Request, Response, RpcError, ScreenView, SessionInfo,
+};
 use argus_reducer::Timestamp;
 use argus_registry::{Entry, LookupError, Registry, now_unix_ms};
 use argus_session::{Session, SessionConfig, SessionHandle};
@@ -244,6 +246,42 @@ impl Engine {
                         lines: snapshot.screen.lines().to_vec(),
                     },
                 })
+            }
+
+            Request::Agents => Ok(Reply::Agents {
+                agents: self
+                    .agents
+                    .values()
+                    .map(|agent| AgentInfo {
+                        id: agent.id().to_string(),
+                        display_name: agent.manifest().display_name.clone(),
+                    })
+                    .collect(),
+            }),
+
+            Request::Respond { id, approve } => {
+                let entry = self.find(&id)?;
+                // The keystrokes come from the manifest of the agent this
+                // session was spawned from -- not from the client, which cannot
+                // know them, and not from a default, which would be right for
+                // one agent and wrong for the rest.
+                let agent = self.agents.get(&entry.agent).ok_or_else(|| {
+                    // Only possible for a session restored from a run whose
+                    // manifests included an agent this run does not. A restored
+                    // session is finished anyway, so say that rather than
+                    // confusing the caller with a missing-agent error.
+                    finished(&entry)
+                })?;
+                let keys = &agent.manifest().keys;
+                let bytes = if approve {
+                    keys.approve_bytes()
+                } else {
+                    keys.deny_bytes()
+                };
+                match &entry.handle {
+                    Some(handle) if handle.send_bytes(bytes).await => Ok(Reply::Done),
+                    _ => Err(finished(&entry)),
+                }
             }
 
             Request::Kill { id } => {
