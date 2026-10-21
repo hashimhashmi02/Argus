@@ -98,6 +98,24 @@ enum Command {
         no_enter: bool,
     },
 
+    /// Approve whatever a session is asking, with that agent's own approve key.
+    ///
+    /// The engine looks the key up in the agent's manifest -- Enter for one
+    /// agent, `y` for another -- so this is the same command for all of them.
+    Approve {
+        /// Session id, or any prefix naming exactly one session.
+        id: String,
+    },
+
+    /// Decline whatever a session is asking, with that agent's own deny key.
+    Deny {
+        /// Session id, or any prefix naming exactly one session.
+        id: String,
+    },
+
+    /// List the agents this engine can spawn.
+    Agents,
+
     /// Change a session's terminal size.
     Resize { id: String, cols: u16, rows: u16 },
 
@@ -122,53 +140,20 @@ fn parse_size(s: &str) -> Result<(u16, u16), String> {
     Ok((cols, rows))
 }
 
-/// How long to wait between typing text and pressing Enter.
-///
-/// Enter has to arrive as its own keystroke. Found by driving a real Claude
-/// Code session: text and `\r` written in one burst are read by the TUI as a
-/// *paste*, and inside a paste Enter is just a newline in the input box -- so the
-/// prompt was typed and never submitted, and sat there for a full minute. A
-/// person never hits this because they press Enter separately; a program has to
-/// do the same. Most modern TUIs detect pastes this way, so this is not a
-/// Claude-specific workaround.
-///
-/// The gap only has to be long enough for the two writes to reach the child as
-/// separate reads. 100ms is far more than that needs and too short for a person
-/// to notice.
-const ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(100);
+/// What a command does over the pipe.
+enum Action {
+    /// One request, one reply.
+    Call(Request),
+    /// Type a line and press Enter as a separate keystroke. See
+    /// [`Client::send_line`] for why that has to be two writes, not one.
+    Line { id: String, text: String },
+}
 
 impl Command {
-    /// The requests this command sends, in order.
-    ///
-    /// Usually one. `send` with text and Enter is two -- see [`ENTER_GAP`].
-    fn into_requests(self) -> Result<Vec<Request>> {
-        if let Command::Send {
-            id,
-            text,
-            key: None,
-            no_enter: false,
-        } = self
-        {
-            return Ok(vec![
-                Request::SendText {
-                    id: id.clone(),
-                    text: text.join(" "),
-                },
-                // `\r`, not `\n`: Enter on a real terminal sends a carriage
-                // return, and a program reading raw input may ignore a line feed
-                // entirely.
-                Request::SendText {
-                    id,
-                    text: "\r".to_string(),
-                },
-            ]);
-        }
-        Ok(vec![self.into_request()?])
-    }
-
-    fn into_request(self) -> Result<Request> {
-        Ok(match self {
+    fn into_action(self) -> Result<Action> {
+        Ok(Action::Call(match self {
             Command::List => Request::List,
+            Command::Agents => Request::Agents,
             Command::Spawn { agent, cwd, size } => Request::Spawn {
                 agent,
                 cwd,
@@ -179,29 +164,35 @@ impl Command {
             Command::Send {
                 id,
                 text,
+                key: None,
+                no_enter: false,
+            } => {
+                return Ok(Action::Line {
+                    id,
+                    text: text.join(" "),
+                });
+            }
+            Command::Send {
+                id,
+                text,
                 key,
-                no_enter,
+                no_enter: _,
             } => {
                 let text = match key {
-                    Some(name) => {
-                        // Every key name resolves to ASCII, so this cannot fail
-                        // for a known key, and literal fallback text came in as a
-                        // `String` already. The check is for honesty, not hope.
-                        String::from_utf8(argus_manifest::key_bytes(&name))
-                            .context("key resolved to bytes that are not valid text")?
-                    }
-                    // Text followed by Enter never reaches here; `into_requests`
-                    // splits it into two keystrokes. What is left is text alone.
-                    None => {
-                        debug_assert!(no_enter, "text + Enter is handled by into_requests");
-                        text.join(" ")
-                    }
+                    // Every key name resolves to ASCII, so this cannot fail for a
+                    // known key, and literal fallback text came in as a `String`
+                    // already. The check is for honesty, not hope.
+                    Some(name) => String::from_utf8(argus_manifest::key_bytes(&name))
+                        .context("key resolved to bytes that are not valid text")?,
+                    None => text.join(" "),
                 };
                 Request::SendText { id, text }
             }
+            Command::Approve { id } => Request::Respond { id, approve: true },
+            Command::Deny { id } => Request::Respond { id, approve: false },
             Command::Resize { id, cols, rows } => Request::Resize { id, cols, rows },
             Command::Kill { id } => Request::Kill { id },
-        })
+        }))
     }
 }
 
@@ -213,6 +204,7 @@ fn print_reply(reply: Reply) {
         }
         Reply::Session { session } => println!("{}", render::session_line(&session)),
         Reply::Screen { screen } => print!("{}", render::screen(&screen)),
+        Reply::Agents { agents } => print!("{}", render::agent_table(&agents)),
         Reply::Done => {}
     }
 }
@@ -222,18 +214,14 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         .pipe
         .as_deref()
         .map_or_else(default_pipe_name, pipe_path);
-    let requests = cli.command.into_requests()?;
+    let action = cli.command.into_action()?;
 
     let result = async {
         let mut client = Client::connect(&pipe).await?;
-        let mut reply = Reply::Done;
-        for (i, request) in requests.into_iter().enumerate() {
-            if i > 0 {
-                tokio::time::sleep(ENTER_GAP).await;
-            }
-            reply = client.call(request).await?;
+        match action {
+            Action::Call(request) => client.call(request).await,
+            Action::Line { id, text } => client.send_line(&id, &text).await.map(|()| Reply::Done),
         }
-        Ok::<Reply, ClientError>(reply)
     }
     .await;
 

@@ -271,3 +271,42 @@ async fn a_bad_size_is_a_usage_error() {
     .await;
     assert_eq!(output.status.code(), Some(2));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn agents_approve_and_deny() {
+    // The test manifest declares no keys, so the defaults apply: approve is
+    // Enter, deny is Escape. The CLI names neither -- the engine looks them up.
+    let engine = start("cli-respond");
+    let pipe = &engine.pipe;
+
+    let agents = cli(pipe, &["agents"]).await;
+    assert!(agents.status.success());
+    assert!(
+        stdout(&agents).contains("test-shell"),
+        "{}",
+        stdout(&agents)
+    );
+
+    let id = spawn(pipe).await;
+    poll(pipe, &["screen", &id], "the prompt", |text| {
+        text.contains('>')
+    })
+    .await;
+
+    cli(
+        pipe,
+        &["send", &id, "--no-enter", "echo", "approved-from-cli"],
+    )
+    .await;
+    let approved = cli(pipe, &["approve", &id]).await;
+    assert!(approved.status.success(), "{}", stderr(&approved));
+    poll(pipe, &["screen", &id], "the approved command", |text| {
+        text.lines().any(|line| line == "approved-from-cli")
+    })
+    .await;
+
+    let missing = cli(pipe, &["deny", "deadbeef"]).await;
+    assert_eq!(missing.status.code(), Some(1));
+
+    cli(pipe, &["kill", &id]).await;
+}

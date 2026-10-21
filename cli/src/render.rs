@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use argus_protocol::{ScreenView, SessionInfo, Status};
+use argus_protocol::{AgentInfo, ScreenView, SessionInfo, Status};
 
 /// `45s`, `4m12s`, `1h04m`. Seconds stop mattering once minutes are double
 /// digits into an hour, and a column of `1h04m37s` is noise.
@@ -106,6 +106,21 @@ pub fn session_table(sessions: &[SessionInfo]) -> String {
         // The last column is not padded, so lines carry no trailing spaces.
         out.push_str(line.join("  ").trim_end());
         out.push('\n');
+    }
+    out
+}
+
+/// The `agents` listing.
+pub fn agent_table(agents: &[AgentInfo]) -> String {
+    let width = agents
+        .iter()
+        .map(|a| a.id.chars().count())
+        .chain(std::iter::once("AGENT".len()))
+        .max()
+        .unwrap_or(0);
+    let mut out = format!("{:<width$}  NAME\n", "AGENT");
+    for agent in agents {
+        out.push_str(&format!("{:<width$}  {}\n", agent.id, agent.display_name));
     }
     out
 }
