@@ -356,7 +356,7 @@ impl Engine {
         // The `Session` value is dropped here and the session keeps running --
         // its task owns everything it needs. The registry keeps a handle, which
         // is all anything will ever need to reach it.
-        let id = self.registry.insert(agent_id, cwd, session.handle());
+        let id = self.registry.insert(agent_id, cwd, None, session.handle());
         // Persist the new session now rather than at the next tick: a spawn is
         // the one change a person would be surprised to see missing after a
         // crash.
