@@ -25,6 +25,7 @@ fn session() -> SessionInfo {
         pid: Some(4242),
         exit_code: None,
         lost: false,
+        resumable: false,
     }
 }
 
@@ -106,6 +107,11 @@ fn every_request_round_trips() {
         Request::ReadScreen { id: "a".into() },
         Request::Kill { id: "a".into() },
         Request::Watch { id: "a".into() },
+        Request::Resume {
+            id: "a".into(),
+            cols: None,
+            rows: Some(40),
+        },
     ];
 
     for request in requests {
@@ -363,4 +369,32 @@ fn an_older_engine_rejects_a_newer_method_as_a_payload_error() {
 
     let error = decoder.next_frame::<Envelope>().unwrap_err();
     assert!(!error.is_fatal());
+}
+
+#[test]
+fn resume_and_resumable_are_additive() {
+    assert_eq!(
+        json(&Envelope::new(Request::Resume {
+            id: "3fa1".into(),
+            cols: None,
+            rows: None,
+        })),
+        r#"{"version":1,"method":"resume","id":"3fa1"}"#
+    );
+
+    // Omitted when false, so an older client sees exactly what it always did;
+    // defaulted when absent, so a newer client reads an older engine as
+    // "nothing to resume".
+    assert!(!json(&session()).contains("resumable"));
+    let lost = SessionInfo {
+        status: Status::Done,
+        pid: None,
+        lost: true,
+        resumable: true,
+        ..session()
+    };
+    assert!(json(&lost).contains(r#""resumable":true"#));
+    let from_an_older_engine: SessionInfo =
+        serde_json::from_str(&json(&lost).replace(r#","resumable":true"#, "")).unwrap();
+    assert!(!from_an_older_engine.resumable);
 }

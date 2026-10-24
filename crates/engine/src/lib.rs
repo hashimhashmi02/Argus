@@ -22,8 +22,8 @@ use argus_manifest::Agent;
 use argus_protocol::{
     AgentInfo, ErrorCode, Reply, Request, Response, RpcError, ScreenView, SessionInfo, WatchEvent,
 };
-use argus_reducer::Timestamp;
-use argus_registry::{Entry, LookupError, Registry, now_unix_ms};
+use argus_reducer::{Status, Timestamp};
+use argus_registry::{Entry, LookupError, Registry, ResumeError, now_unix_ms};
 use argus_session::{Repaint, Session, SessionConfig, SessionHandle, StreamItem, Watch};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Notify, mpsc};
@@ -192,8 +192,10 @@ impl Engine {
     async fn dispatch(&self, request: Request) -> Result<Reply, RpcError> {
         match request {
             Request::List => Ok(Reply::Sessions {
-                sessions: self.registry.list().iter().map(info).collect(),
+                sessions: self.registry.list().iter().map(|e| self.info(e)).collect(),
             }),
+
+            Request::Resume { id, cols, rows } => self.resume(&id, cols, rows),
 
             Request::Spawn {
                 agent,
@@ -210,7 +212,7 @@ impl Engine {
                 // from a previous run has no handle at all, and is the same case.
                 match &entry.handle {
                     Some(handle) if handle.send_text(&text).await => Ok(Reply::Done),
-                    _ => Err(finished(&entry)),
+                    _ => Err(self.finished(&entry)),
                 }
             }
 
@@ -218,13 +220,13 @@ impl Engine {
                 let entry = self.find(&id)?;
                 match &entry.handle {
                     Some(handle) if handle.resize(cols, rows).await => Ok(Reply::Done),
-                    _ => Err(finished(&entry)),
+                    _ => Err(self.finished(&entry)),
                 }
             }
 
             Request::ReadScreen { id } => {
                 let entry = self.find(&id)?;
-                let session = info(&entry);
+                let session = self.info(&entry);
                 let Some(handle) = &entry.handle else {
                     // Screens are not persisted -- they would be most of the
                     // state file and stale by definition -- so a session from a
@@ -279,7 +281,7 @@ impl Engine {
                     // manifests included an agent this run does not. A restored
                     // session is finished anyway, so say that rather than
                     // confusing the caller with a missing-agent error.
-                    finished(&entry)
+                    self.finished(&entry)
                 })?;
                 let keys = &agent.manifest().keys;
                 let bytes = if approve {
@@ -289,7 +291,7 @@ impl Engine {
                 };
                 match &entry.handle {
                     Some(handle) if handle.send_bytes(bytes).await => Ok(Reply::Done),
-                    _ => Err(finished(&entry)),
+                    _ => Err(self.finished(&entry)),
                 }
             }
 
@@ -331,40 +333,145 @@ impl Engine {
             )
         })?;
 
-        let mut config = SessionConfig::default();
-        if let (Some(cols), Some(rows)) = (cols, rows) {
-            config = config.size(cols, rows);
+        // Recorded as an absolute path even when none was asked for, because
+        // resuming has to happen in the same folder: an agent like Claude Code
+        // files its conversations by folder. "The engine's own directory" or a
+        // relative path would mean something else to the next engine.
+        let cwd = match cwd {
+            Some(dir) => std::path::absolute(&dir),
+            None => std::env::current_dir(),
         }
+        .map_err(|e| {
+            RpcError::new(
+                ErrorCode::BadRequest,
+                format!("could not resolve the working directory: {e}"),
+            )
+        })?;
 
-        let cwd = cwd.map(PathBuf::from);
-        if let Some(dir) = &cwd {
-            // Checked here so the error says what is actually wrong. Left to the
-            // OS, a missing directory surfaces as a generic spawn failure that
-            // names the program, not the path.
-            if !dir.is_dir() {
-                return Err(RpcError::new(
-                    ErrorCode::BadRequest,
-                    format!("working directory {} does not exist", dir.display()),
-                ));
-            }
-            config = config.cwd(dir);
-        }
-
-        let session = Session::spawn(Arc::clone(agent), config)
-            .map_err(|e| RpcError::new(ErrorCode::SpawnFailed, format!("{e:#}")))?;
+        let config = sized(SessionConfig::default(), cols, rows);
+        let session = start_in(agent, config, &cwd)?;
 
         // The `Session` value is dropped here and the session keeps running --
         // its task owns everything it needs. The registry keeps a handle, which
         // is all anything will ever need to reach it.
-        let id = self.registry.insert(agent_id, cwd, None, session.handle());
+        let id = self.registry.insert(
+            agent_id,
+            Some(cwd),
+            session.agent_session().map(String::from),
+            session.handle(),
+        );
         // Persist the new session now rather than at the next tick: a spawn is
         // the one change a person would be surprised to see missing after a
         // crash.
         self.dirty.notify_one();
         let entry = self.find(&id)?;
         Ok(Reply::Session {
-            session: info(&entry),
+            session: self.info(&entry),
         })
+    }
+
+    /// Start a finished session again, keeping its id.
+    fn resume(&self, id: &str, cols: Option<u16>, rows: Option<u16>) -> Result<Reply, RpcError> {
+        let entry = self.find(id)?;
+        if is_running(&entry) {
+            // Like `kill` on a dead session: the caller wanted it running, and
+            // it is.
+            return Ok(Reply::Session {
+                session: self.info(&entry),
+            });
+        }
+        let (agent, cwd) = self.how_to_resume(&entry).map_err(|reason| {
+            RpcError::new(
+                ErrorCode::BadRequest,
+                format!("session {} cannot be resumed: {reason}", entry.id),
+            )
+        })?;
+
+        // Claimed before anything starts, so two resumes cannot both launch it.
+        let claimed = self
+            .registry
+            .begin_resume(&entry.id, |handle| handle.status() != Status::Done)
+            .map_err(|error| match error {
+                ResumeError::NotFound(_) => {
+                    RpcError::new(ErrorCode::UnknownSession, error.to_string())
+                }
+                ResumeError::Running(_) | ResumeError::AlreadyResuming(_) => {
+                    RpcError::new(ErrorCode::BadRequest, error.to_string())
+                }
+            })?;
+
+        let config = sized(SessionConfig::default(), cols, rows).resume(claimed.agent_session);
+        let session = match start_in(agent, config, cwd) {
+            Ok(session) => session,
+            Err(error) => {
+                self.registry.abort_resume(&entry.id);
+                return Err(error);
+            }
+        };
+
+        self.registry.finish_resume(&entry.id, session.handle());
+        self.dirty.notify_one();
+        let entry = self.find(&entry.id)?;
+        Ok(Reply::Session {
+            session: self.info(&entry),
+        })
+    }
+
+    /// The agent and folder to resume a session with, or why it cannot be.
+    ///
+    /// Says nothing about whether it is still running; that is the caller's
+    /// question.
+    fn how_to_resume<'a>(
+        &'a self,
+        entry: &'a Entry<SessionHandle>,
+    ) -> Result<(&'a Arc<Agent>, &'a Path), String> {
+        let agent = self
+            .agents
+            .get(&entry.agent)
+            .ok_or_else(|| format!("no agent `{}` is loaded", entry.agent))?;
+        if !agent.can_resume() {
+            return Err(format!(
+                "agent `{}` has no `resume` in its manifest",
+                entry.agent
+            ));
+        }
+        // Sessions from before step 9 may have neither. Resuming one in the
+        // wrong folder, or as "the latest conversation", could quietly bring
+        // back someone else's work, so they are refused instead.
+        let cwd = entry
+            .cwd
+            .as_deref()
+            .ok_or("its working directory was not recorded")?;
+        if agent.wants_session_uuid() && entry.agent_session.is_none() {
+            return Err("its conversation id was not recorded".into());
+        }
+        Ok((agent, cwd))
+    }
+
+    fn info(&self, entry: &Entry<SessionHandle>) -> SessionInfo {
+        SessionInfo {
+            resumable: !is_running(entry) && self.how_to_resume(entry).is_ok(),
+            ..summary(entry)
+        }
+    }
+
+    /// The error for talking to a session that is not running.
+    fn finished(&self, entry: &Entry<SessionHandle>) -> RpcError {
+        let next = if self.how_to_resume(entry).is_ok() {
+            format!("resume it with `resume {}`", entry.id)
+        } else {
+            "spawn a new one".into()
+        };
+        // "Finished" would be exactly the claim `lost` exists to avoid making.
+        let what = if entry.restored.as_ref().is_some_and(|r| r.lost) {
+            "was lost when the previous engine stopped"
+        } else {
+            "has already finished"
+        };
+        RpcError::new(
+            ErrorCode::SessionFinished,
+            format!("session {} {what}; {next}", entry.id),
+        )
     }
 
     fn find(&self, id: &str) -> Result<Entry<SessionHandle>, RpcError> {
@@ -388,7 +495,7 @@ impl Handler for Engine {
         let entry = self.find(&id)?;
         // A session from a previous run has no terminal left to follow; say so
         // rather than streaming an empty screen.
-        let handle = entry.handle.clone().ok_or_else(|| finished(&entry))?;
+        let handle = entry.handle.clone().ok_or_else(|| self.finished(&entry))?;
         let (events, receiver) = mpsc::channel(WATCH_DEPTH);
         tokio::spawn(forward_watch(handle, events));
         Ok(receiver)
@@ -458,7 +565,8 @@ fn repaint_event(repaint: Repaint) -> WatchEvent {
     }
 }
 
-fn info(entry: &Entry<SessionHandle>) -> SessionInfo {
+/// A session as the engine sees it, before deciding whether it can be resumed.
+fn summary(entry: &Entry<SessionHandle>) -> SessionInfo {
     match (&entry.handle, &entry.restored) {
         (Some(handle), _) => {
             let snapshot = handle.snapshot();
@@ -472,6 +580,7 @@ fn info(entry: &Entry<SessionHandle>) -> SessionInfo {
                 pid: snapshot.pid,
                 exit_code: snapshot.exit_code,
                 lost: false,
+                resumable: false,
             }
         }
         (None, Some(record)) => SessionInfo {
@@ -488,6 +597,7 @@ fn info(entry: &Entry<SessionHandle>) -> SessionInfo {
             pid: None,
             exit_code: record.exit_code,
             lost: record.lost,
+            resumable: false,
         },
         // The registry only ever creates entries one way or the other. If that
         // changes, an honest "done, unknown" is a better answer than a panic in
@@ -495,30 +605,49 @@ fn info(entry: &Entry<SessionHandle>) -> SessionInfo {
         (None, None) => SessionInfo {
             id: entry.id.clone(),
             agent: entry.agent.clone(),
-            status: argus_reducer::Status::Done,
+            status: Status::Done,
             since_ms: 0,
             status_for_ms: 0,
             rule: None,
             pid: None,
             exit_code: None,
             lost: true,
+            resumable: false,
         },
     }
 }
 
-fn finished(entry: &Entry<SessionHandle>) -> RpcError {
-    // "Finished" would be exactly the claim `lost` exists to avoid making.
-    if entry.restored.as_ref().is_some_and(|r| r.lost) {
-        return RpcError::new(
-            ErrorCode::SessionFinished,
-            format!(
-                "session {} was lost when the previous engine stopped; spawn a new one",
-                entry.id
-            ),
-        );
+/// Whether a session's process is still going.
+///
+/// `Done` rather than "the task has ended": a child that has exited is gone
+/// even while its session task drains the last of its output, and a resume
+/// should not have to wait for that.
+fn is_running(entry: &Entry<SessionHandle>) -> bool {
+    entry
+        .handle
+        .as_ref()
+        .is_some_and(|handle| handle.status() != Status::Done)
+}
+
+fn sized(config: SessionConfig, cols: Option<u16>, rows: Option<u16>) -> SessionConfig {
+    match (cols, rows) {
+        (Some(cols), Some(rows)) => config.size(cols, rows),
+        _ => config,
     }
-    RpcError::new(
-        ErrorCode::SessionFinished,
-        format!("session {} has already finished", entry.id),
-    )
+}
+
+/// Start `agent` in `cwd`.
+fn start_in(agent: &Arc<Agent>, config: SessionConfig, cwd: &Path) -> Result<Session, RpcError> {
+    // Checked here so the error says what is actually wrong. Left to the OS, a
+    // missing directory surfaces as a generic spawn failure that names the
+    // program, not the path -- and for a resume, the folder may well have been
+    // deleted since.
+    if !cwd.is_dir() {
+        return Err(RpcError::new(
+            ErrorCode::BadRequest,
+            format!("working directory {} does not exist", cwd.display()),
+        ));
+    }
+    Session::spawn(Arc::clone(agent), config.cwd(cwd))
+        .map_err(|e| RpcError::new(ErrorCode::SpawnFailed, format!("{e:#}")))
 }
