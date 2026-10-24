@@ -33,10 +33,10 @@ impl EngineLauncher {
     /// Look beside this executable for `argus-engine.exe`, and upward from it
     /// for a `manifests` directory.
     ///
-    /// In development both binaries are built into the same `target\debug`, and
-    /// the repository's `manifests\` is a few directories up. A packaged install
-    /// will need a real answer to "where do manifests live" -- that is a
-    /// packaging decision for later, and `ARGUS_MANIFESTS` overrides this for now.
+    /// Installed, all three binaries and `manifests\` sit in one folder, and
+    /// the search finds it at its first step. In development both binaries are
+    /// built into the same `target\debug`, and the repository's `manifests\` is
+    /// a few directories up. `ARGUS_MANIFESTS` overrides either.
     pub fn locate() -> io::Result<Self> {
         let here = std::env::current_exe()?;
         let dir = here.parent().unwrap_or(Path::new("."));
@@ -93,6 +93,13 @@ impl EngineLauncher {
         // of the real one. Like every ARGUS_ variable, never passed on to agents.
         if let Some(state) = std::env::var_os("ARGUS_STATE") {
             command.arg("--state").arg(state);
+        }
+        // A session spawned without a folder runs in the engine's, and the
+        // engine is remembered as having run there. Started from the Start
+        // menu, the UI's own working directory is wherever Explorer chose --
+        // often System32 -- so the engine starts in the user's home instead.
+        if let Some(home) = std::env::var_os("USERPROFILE").filter(|h| Path::new(h).is_dir()) {
+            command.current_dir(home);
         }
         command
             .stdin(Stdio::null())

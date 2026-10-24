@@ -624,6 +624,48 @@ Verified in the real app: start the engine from the UI, run three shells (one
 mid-command), close the window — the engine and all three keep running — and
 reopen the UI straight onto them.
 
+### Installing
+
+A release is **one zip**, built by `scripts/package.ps1` and published with
+`gh release create` under a tag matching the workspace version: `Argus.exe`
+(the app), `argus-engine.exe`, `argus-cli.exe` and `manifests\`, side by side,
+with a `SHA256SUMS` beside it. `install.ps1` is the installer, run as
+`irm …/install.ps1 | iex`:
+
+- **Per user, no admin.** It unpacks into `%LOCALAPPDATA%\Programs\Argus`, adds
+  that folder to the *user* PATH, and adds a Start menu shortcut. Nothing is
+  written outside the user's profile, so nothing needs elevation — and an
+  installer that does not ask for admin cannot do anything that needed it.
+- **Checked before it is unpacked.** The zip is hashed and compared with the
+  release's `SHA256SUMS`; a mismatch stops the install.
+- **It never stops the engine.** Upgrading means replacing files the running
+  engine holds open, and stopping the engine stops every agent session it
+  owns. So the installer refuses while anything runs from the install folder,
+  and says how to stop it. Choosing when to lose live sessions is the user's
+  call.
+- **It only deletes what it made.** The install folder carries a marker file,
+  and an existing folder without one is refused rather than replaced, so a
+  mistyped `-InstallDir` cannot wipe something else. Uninstalling leaves the
+  session history in `%LOCALAPPDATA%\Argus` unless asked to `-Purge` it.
+- **PATH is edited as text, in the registry.** The obvious call,
+  `[Environment]::SetEnvironmentVariable("Path", …, "User")`, reads
+  `%USERPROFILE%\…` entries already expanded and writes the value back as a
+  plain string, freezing every one of them — found by testing this installer
+  against a real profile. It reads the raw value, keeps its registry type,
+  adds or removes only its own entry, and broadcasts the change so the next
+  terminal sees it. An install and uninstall leave the value byte-identical.
+- **Everything is inside a function.** Piped into `iex`, a script has no path
+  and cannot take arguments, so the file defines `Install-Argus` and calls it
+  with `@args`. The same file then works piped, as a script block with
+  arguments, and run from a clone.
+
+Two things the installed layout needed from the code. The engine looks for
+`manifests\` beside its own executable before the working directory, so
+`argus-engine` works from any folder. And the app starts the engine in the
+user's home: launched from the Start menu, the app's own working directory is
+wherever Explorer chose, and a session spawned without a folder is recorded as
+running in the engine's.
+
 ## Hardening rules
 
 These are not hypothetical. They come from the bug history of Zeus and from the
@@ -671,6 +713,7 @@ Each step is a working, runnable checkpoint — not a half-finished layer.
 | 8a | `app/`: Tauri UI — every screen tiled live, approve/deny, spawn, kill | **done** |
 | 8b | `app/`: interactive terminal (xterm.js) over a streaming `watch` RPC | **done** |
 | 9 | `resume`: a lost or finished session started again, same id, same conversation | **done** |
+| 10 | Packaging: a release zip, and a one-line `install.ps1` that installs it | **done** |
 
 The UI is last on purpose. A UI built on an unstable protocol locks in the
 mistakes of that protocol.

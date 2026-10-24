@@ -9,11 +9,11 @@ and which is **done**.
 
 Windows-native, written in Rust, built on [ConPTY](https://devblogs.microsoft.com/commandline/windows-command-line-introducing-the-windows-pseudo-console-conpty/).
 
-> **Status: early.** Step 9. The engine runs as a daemon, a desktop app and
-> `argus-cli` both drive it, and the session list survives an engine restart. A
-> session lost in a crash can be resumed, back into the same conversation. The
-> app tiles every agent's screen, and a zoomed pane is the agent's real terminal,
-> live and typeable.
+> **Status: early.** Step 10: installable in one line. The engine runs as a
+> daemon, a desktop app and `argus-cli` both drive it, and the session list
+> survives an engine restart. A session lost in a crash can be resumed, back
+> into the same conversation. The app tiles every agent's screen, and a zoomed
+> pane is the agent's real terminal, live and typeable.
 > See [DESIGN.md](DESIGN.md) for the architecture and the build order.
 
 ## Why
@@ -25,10 +25,60 @@ Argus tells you which window to look at.
 Sessions live in a background daemon rather than in the UI process, so closing
 the Argus window never kills a running agent.
 
-## Try the current checkpoint
+## Install
+
+One line in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/hashimhashmi02/Argus/main/install.ps1 | iex
+```
+
+It downloads the latest release, checks it against the release's `SHA256SUMS`,
+unpacks it into `%LOCALAPPDATA%\Programs\Argus`, puts `argus-cli` and
+`argus-engine` on your user PATH, and adds **Argus** to the Start menu. No admin
+rights, nothing outside your user profile. Windows 10 or 11, x64; the window
+needs the WebView2 runtime, which Windows 11 already has.
+
+A specific version, or to uninstall (your session history in
+`%LOCALAPPDATA%\Argus` stays unless you add `-Purge`):
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/hashimhashmi02/Argus/main/install.ps1))) -Version 0.1.0
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/hashimhashmi02/Argus/main/install.ps1))) -Uninstall
+```
+
+The installer will not upgrade or uninstall while the engine is running from
+the install folder, because stopping the engine stops every agent session it
+owns. It tells you how to stop it when you are ready.
+
+The binaries are not code-signed yet, so Windows SmartScreen may ask before the
+first launch.
+
+## Build from source
 
 Requires the Rust MSVC toolchain (`rustup default stable-x86_64-pc-windows-msvc`)
 and the Visual Studio Build Tools C++ workload for the linker.
+
+To build the same zip a release ships, and install from it:
+
+```powershell
+.\scripts\package.ps1
+```
+
+```powershell
+.\install.ps1 -FromZip dist\argus-0.1.0-x86_64-pc-windows-msvc.zip
+```
+
+A release is that zip and its `SHA256SUMS`, published under a version tag that
+matches the version in `Cargo.toml` — which is what the one-line installer
+downloads:
+
+```powershell
+gh release create v0.1.0 dist\argus-0.1.0-x86_64-pc-windows-msvc.zip dist\SHA256SUMS --title "Argus v0.1.0" --generate-notes
+```
 
 ### The desktop app
 

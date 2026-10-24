@@ -9,6 +9,9 @@
 //! argus-engine [--manifests DIR] [--pipe NAME] [--state FILE]
 //! ```
 //!
+//! Loads agents from `--manifests`, by default the `manifests` folder beside
+//! this executable (an install) or in the working directory (`cargo run`).
+//!
 //! Remembers its sessions in `--state` (by default
 //! `%LOCALAPPDATA%\Argus\state.json`), so the list survives a restart. The
 //! sessions themselves do not: when the engine stops, its pseudo-consoles close
@@ -28,11 +31,25 @@ struct Args {
     state: PathBuf,
 }
 
+/// `manifests\` beside this executable, where an install puts it; otherwise
+/// `manifests` in the working directory, which is the repository root under
+/// `cargo run`.
+///
+/// Beside the executable first, so an installed engine started from a folder
+/// that happens to hold some other `manifests` does not load those instead.
+fn default_manifest_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.join("manifests")))
+        .filter(|dir| dir.is_dir())
+        .unwrap_or_else(|| PathBuf::from("manifests"))
+}
+
 /// Three flags still do not justify an argument-parsing dependency in a binary
 /// nobody types much. The CLI, with subcommands and help text, has one.
 fn parse_args() -> Result<Args> {
     let mut args = Args {
-        manifests: PathBuf::from("manifests"),
+        manifests: default_manifest_dir(),
         pipe: default_pipe_name(),
         state: default_state_path(),
     };
