@@ -147,18 +147,23 @@ function PolledScreen({ session: s, current }: { session: SessionInfo; current: 
   const { data: view } = usePolling(() => api.readScreen(s.id), interval, [s.id]);
 
   if (view && view.cols > 0) return <Screen view={view} cursor={current && !dead} />;
+  // Said, not offered as a button: several lost panes each with a yellow
+  // button would compete with the one pane that actually needs you.
+  const resume = s.resumable && (
+    <> Select it and press r to resume it, in the same folder and conversation.</>
+  );
   if (s.lost) {
     return (
       <p className="pane-note">
         This session was still running when the engine last stopped, and its process went with it.
-        Its screen was not kept.
+        Its screen was not kept.{resume}
       </p>
     );
   }
   if (dead && view) {
     return (
       <p className="pane-note">
-        This session ended before the engine last restarted. Its screen was not kept.
+        This session ended before the engine last restarted. Its screen was not kept.{resume}
       </p>
     );
   }
