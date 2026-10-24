@@ -46,7 +46,9 @@ Actions: spawn (agent + optional working directory), type into a zoomed pane's l
 
 The tiled screens are the emulated terminal as plain text, polled; a zoomed live pane is the real terminal, streamed in full colour.
 
-Not yet built: stopping the engine from the UI, packaging, notifications beyond a taskbar flash and a count in the window title.
+Installed per user by a one-line PowerShell installer (Start menu shortcut, no admin), from a release zip.
+
+Not yet built: stopping the engine from the UI, code signing, notifications beyond a taskbar flash and a count in the window title.
 
 Terminology: session, agent, engine, manifest, rule, needs you, lost, resumable.
 
