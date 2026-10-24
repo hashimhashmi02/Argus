@@ -42,13 +42,13 @@ Per session: an 8-character id (any unique prefix is accepted elsewhere, e.g. th
 
 Statuses: **working**, **needs you**, **idle**, **done**, plus **lost** — a session that was still running when a previous engine stopped and died with it. Lost is not done and must never read as finished.
 
-Actions: spawn (agent + optional working directory), send a line (Enter sent as its own keystroke), send a named key (Enter, Esc, Ctrl+C, arrows), approve / deny (the engine sends that agent's own keys from its manifest), kill, and start the engine when it is not running.
+Actions: spawn (agent + optional working directory), type into a zoomed pane's live terminal, send a line (Enter sent as its own keystroke), send a named key (Enter, Esc, Ctrl+C, arrows), approve / deny (the engine sends that agent's own keys from its manifest), kill, resume a finished or lost session (same id, same folder, same conversation; the engine says which sessions can be), and start the engine when it is not running.
 
-The screen is the emulated terminal as plain text: colour and text attributes are dropped by design, so the UI receives monochrome lines plus cursor position.
+The tiled screens are the emulated terminal as plain text, polled; a zoomed live pane is the real terminal, streamed in full colour.
 
-Not yet built: an interactive terminal (typing directly into the screen; planned next), stopping the engine from the UI, packaging, notifications beyond a taskbar flash and a count in the window title.
+Not yet built: stopping the engine from the UI, packaging, notifications beyond a taskbar flash and a count in the window title.
 
-Terminology: session, agent, engine, manifest, rule, needs you, lost.
+Terminology: session, agent, engine, manifest, rule, needs you, lost, resumable.
 
 ## Brand Commitments
 

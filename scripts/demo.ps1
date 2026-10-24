@@ -12,9 +12,10 @@
     Everything runs against a private pipe and a scratch state file in %TEMP%,
     so it never touches your real Argus state or a running engine.
 
-    -WithClaude adds a fourth act driving a real Claude Code session. That sends
-    one small prompt on your Claude account, and needs `claude` to be installed
-    and logged in (`claude /login`).
+    -WithClaude adds two acts driving a real Claude Code session: one that
+    approves a file write, and one that crashes the engine mid-conversation and
+    resumes the same conversation. That sends two small prompts on your Claude
+    account, and needs `claude` to be installed and logged in (`claude /login`).
 
 .EXAMPLE
     .\scripts\demo.ps1
@@ -202,10 +203,27 @@ try {
         } else {
             Say "demo.txt was not created -- see the screen above for why."
         }
+
+        Act "10. Crash with Claude mid-conversation, then resume it"
+        $uuid = ((Get-Content $state | ConvertFrom-Json).sessions | Where-Object { $_.id -eq $claude }).agent_session
+        Say "Argus started it with its own conversation id: $uuid"
+        Stop-Process -Id $engine.Id -Force
+        $engine.WaitForExit()
+        $engine = Start-Engine
+        Show-Argus list
+        Say "Lost, and marked *: its manifest says how to resume, and the engine"
+        Say "kept the folder and the conversation id it needs."
+        Show-Argus resume $claude.Substring(0, 4)
+        Wait-Status $claude "idle" 60 | Out-Null
+        Say "Same id, same folder, same conversation. Asking it what it remembers:"
+        Show-Argus send $claude.Substring(0, 4) "What is the name of the file you created earlier? Reply with the file name only."
+        Wait-Status $claude "working" 30 | Out-Null
+        Wait-Status $claude "idle" 120 | Out-Null
+        Show-Argus screen $claude.Substring(0, 4)
     }
 
     Act "Done"
-    Say "Run it yourself any time: .\scripts\demo.ps1   (add -WithClaude for act 9)"
+    Say "Run it yourself any time: .\scripts\demo.ps1   (add -WithClaude for acts 9 and 10)"
 }
 finally {
     if ($engine -and -not $engine.HasExited) {

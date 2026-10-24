@@ -43,6 +43,7 @@ fn main() {
             commands::resize_session,
             commands::respond,
             commands::kill_session,
+            commands::resume_session,
             commands::watch_session,
             commands::unwatch_session,
             commands::start_engine,

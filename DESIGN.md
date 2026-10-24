@@ -483,10 +483,64 @@ that down:
    Windows enforces share modes in the kernel and releases them when a process
    dies, so a crash never leaves a stale lock behind.
 
-**Not done: resuming lost sessions.** Some agents can reattach to previous work
-(`claude --continue`), and manifests already carry `resume.args`. Relaunching a
-lost session through it is the natural next step, but it was a stretch goal for
-step 7 and is left for later.
+### Resuming a session
+
+A lost session — or one that simply exited — can be started again with
+`resume`. It comes back **under the same id, in the same place in the list**,
+running the agent's own resume command in the folder it ran in. A second entry
+for the same work would leave a dead row beside a live one, and nothing would
+say which to look at.
+
+**By conversation id, not "the latest".** The obvious resume for Claude Code is
+`claude --continue`, and it is wrong here: it reopens *the most recent
+conversation in the current folder*. Argus runs agents side by side, often in
+one folder, so three lost Claude sessions resumed that way would all reopen the
+same conversation. Instead the manifest names the conversation:
+
+```json
+"launch": { "program": "claude", "new_session_args": ["--session-id", "{session_uuid}"] },
+"resume": { "args": ["--resume", "{session_uuid}"] }
+```
+
+Argus makes up a UUID when the session starts, passes it in, and keeps it in
+the state file as `agent_session`. `new_session_args` is a separate list from
+`launch.args` because Claude refuses `--session-id` together with `--resume`
+(checked: *"--session-id can only be used with --continue or --resume if
+--fork-session is also specified"*). A manifest that resumes by
+`{session_uuid}` without ever launching with it is rejected when it loads.
+
+**The folder is recorded even when none was asked for.** Spawn stores the
+engine's own working directory, made absolute, when the request names none.
+Claude Code files conversations by folder, and "wherever the engine was
+started" means something else to the next engine.
+
+**Refused rather than guessed:** an agent with no `resume`, and sessions from
+before step 9, which have no recorded folder or conversation id. Resuming those
+in the wrong folder, or as "whatever was last", could quietly bring back
+someone else's work. `SessionInfo.resumable` carries the engine's verdict, so a
+client only has to show it.
+
+**Two resumes at once start one process.** The registry claims the entry
+before anything is spawned and releases it when the new process is attached or
+the spawn fails. Without the claim, both callers would start the agent and the
+loser's process would run on with no handle pointing at it. Resuming a session
+that is already running returns it unchanged, as `kill` does for one that has
+already stopped.
+
+A resumed entry drops what it was restored as — it is no longer lost — but
+keeps the fields from a newer Argus that this build did not understand, and its
+persisted status times count from the new process rather than from creation.
+
+Checked live with Claude Code v2.1.142 (`demo.ps1 -WithClaude`, act 10): a
+session started with `--session-id`, lost in a hard-killed engine, and resumed,
+came back under its own id showing the prompt it had been sent before the
+crash. The same run found that Claude Code now draws its input line as `❯`
+rather than `>`, which had left every idle Claude reading as working; the idle
+rule accepts both.
+
+Not covered: an agent that was lost before it wrote its conversation down.
+`claude --resume <id>` then finds nothing, and the pane shows Claude's own
+error. Argus does not read an agent's private files to check beforehand.
 
 ### The UI
 
@@ -616,6 +670,7 @@ Each step is a working, runnable checkpoint — not a half-finished layer.
 | 7 | `registry` persistence: the session list survives an engine restart | **done** |
 | 8a | `app/`: Tauri UI — every screen tiled live, approve/deny, spawn, kill | **done** |
 | 8b | `app/`: interactive terminal (xterm.js) over a streaming `watch` RPC | **done** |
+| 9 | `resume`: a lost or finished session started again, same id, same conversation | **done** |
 
 The UI is last on purpose. A UI built on an unstable protocol locks in the
 mistakes of that protocol.

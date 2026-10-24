@@ -62,6 +62,13 @@ pub struct SessionRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
 
+    /// The id of the agent's own conversation, which resuming asks for back.
+    ///
+    /// Only for agents whose manifest uses `{session_uuid}`. Absent from files
+    /// written before step 9, and an older build keeps it in `extra`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_session: Option<String>,
+
     /// Wall-clock creation time, in Unix milliseconds.
     ///
     /// Wall clock here, unlike everywhere else in Argus, because it has to mean

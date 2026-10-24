@@ -39,4 +39,12 @@ pub enum ManifestError {
 
     #[error("manifest `{id}` has no rules, so it could never report a status")]
     NoRules { id: String },
+
+    /// `resume.args` asks for a conversation by id, but no fresh launch ever
+    /// gives the agent that id -- so there would never be anything to resume.
+    #[error(
+        "manifest `{id}` resumes by `{{session_uuid}}` but never starts a session with one; \
+         add it to `launch.new_session_args`"
+    )]
+    ResumeWithoutSessionUuid { id: String },
 }

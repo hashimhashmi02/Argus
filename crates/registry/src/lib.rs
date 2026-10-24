@@ -16,6 +16,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde_json::{Map, Value};
+
 pub mod persist;
 
 pub use persist::{Loaded, STATE_FORMAT, SessionRecord, StateFile, now_unix_ms};
@@ -33,8 +35,18 @@ pub struct Entry<H> {
     pub agent: String,
     pub cwd: Option<PathBuf>,
 
+    /// The id of the agent's own conversation, for agents that resume by one.
+    pub agent_session: Option<String>,
+
     /// Wall-clock creation time, Unix milliseconds.
     pub created_unix_ms: u64,
+
+    /// Wall-clock time the current process started, Unix milliseconds.
+    ///
+    /// The same as `created_unix_ms` until the session is resumed. Kept apart
+    /// because a live session's times are offsets from its own process's
+    /// start, while the list stays in order of creation.
+    pub started_unix_ms: u64,
 
     /// The live session, if this engine spawned it.
     ///
@@ -49,8 +61,29 @@ pub struct Entry<H> {
     /// saving it again writes back everything that was read.
     pub restored: Option<SessionRecord>,
 
+    /// Fields a restored record carried that this build does not understand,
+    /// kept once the session is resumed and `restored` is gone, so a newer
+    /// Argus's fields outlive an older one bringing the session back.
+    pub extra: Map<String, Value>,
+
     /// Creation order, so `list` is stable rather than in hash order.
     seq: u64,
+
+    /// A resume has started and not yet attached its process.
+    resuming: bool,
+}
+
+/// Why a session cannot start resuming.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum ResumeError {
+    #[error("no session `{0}`")]
+    NotFound(String),
+
+    #[error("session {0} is still running")]
+    Running(String),
+
+    #[error("session {0} is already being resumed")]
+    AlreadyResuming(String),
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -102,7 +135,13 @@ impl<H: Clone> Registry<H> {
     }
 
     /// Record a newly spawned session and return the id assigned to it.
-    pub fn insert(&self, agent: &str, cwd: Option<PathBuf>, handle: H) -> String {
+    pub fn insert(
+        &self,
+        agent: &str,
+        cwd: Option<PathBuf>,
+        agent_session: Option<String>,
+        handle: H,
+    ) -> String {
         let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
         let mut sessions = self.sessions.lock().unwrap();
 
@@ -118,16 +157,21 @@ impl<H: Clone> Registry<H> {
             salt += 1;
         };
 
+        let now = now_unix_ms();
         sessions.insert(
             id.clone(),
             Entry {
                 id: id.clone(),
                 agent: agent.to_string(),
                 cwd,
-                created_unix_ms: now_unix_ms(),
+                agent_session,
+                created_unix_ms: now,
+                started_unix_ms: now,
                 handle: Some(handle),
                 restored: None,
+                extra: Map::new(),
                 seq,
+                resuming: false,
             },
         );
         id
@@ -156,15 +200,74 @@ impl<H: Clone> Registry<H> {
                     id: record.id.clone(),
                     agent: record.agent.clone(),
                     cwd: record.cwd.clone(),
+                    agent_session: record.agent_session.clone(),
                     created_unix_ms: record.created_unix_ms,
+                    started_unix_ms: record.created_unix_ms,
                     handle: None,
                     restored: Some(record),
+                    extra: Map::new(),
                     seq,
+                    resuming: false,
                 },
             );
             restored += 1;
         }
         restored
+    }
+
+    /// Claim a finished session for resuming, so that nothing else can.
+    ///
+    /// Takes the full id, as [`find`](Self::find) returns it. `is_live` says
+    /// whether a handle's session is still running; the registry is generic
+    /// over the handle and cannot tell on its own.
+    ///
+    /// The claim is made before any process is started and released by
+    /// [`finish_resume`](Self::finish_resume) or
+    /// [`abort_resume`](Self::abort_resume). Two resumes racing for one
+    /// session would otherwise both start the agent, and the loser's process
+    /// would run on with nothing holding a handle to it.
+    pub fn begin_resume(
+        &self,
+        id: &str,
+        is_live: impl FnOnce(&H) -> bool,
+    ) -> Result<Entry<H>, ResumeError> {
+        let mut sessions = self.sessions.lock().unwrap();
+        let entry = sessions
+            .get_mut(id)
+            .ok_or_else(|| ResumeError::NotFound(id.to_string()))?;
+        if entry.resuming {
+            return Err(ResumeError::AlreadyResuming(id.to_string()));
+        }
+        if entry.handle.as_ref().is_some_and(is_live) {
+            return Err(ResumeError::Running(id.to_string()));
+        }
+        entry.resuming = true;
+        Ok(entry.clone())
+    }
+
+    /// Attach the resumed session's process, releasing the claim.
+    ///
+    /// The entry keeps its id, its place in the list and its creation time.
+    /// What it was restored as is dropped -- it is no longer lost -- except
+    /// the fields this build did not understand, which move to `extra`.
+    pub fn finish_resume(&self, id: &str, handle: H) {
+        let mut sessions = self.sessions.lock().unwrap();
+        let Some(entry) = sessions.get_mut(id) else {
+            return;
+        };
+        if let Some(record) = entry.restored.take() {
+            entry.extra = record.extra;
+        }
+        entry.handle = Some(handle);
+        entry.started_unix_ms = now_unix_ms();
+        entry.resuming = false;
+    }
+
+    /// Release a claim whose resume failed, leaving the entry as it was.
+    pub fn abort_resume(&self, id: &str) {
+        if let Some(entry) = self.sessions.lock().unwrap().get_mut(id) {
+            entry.resuming = false;
+        }
     }
 
     /// Find a session by full id, or by any prefix that names exactly one.
@@ -280,10 +383,14 @@ mod lookup_tests {
                     id: id.to_string(),
                     agent: "test".into(),
                     cwd: None,
+                    agent_session: None,
                     created_unix_ms: seq as u64,
+                    started_unix_ms: seq as u64,
                     handle: Some(seq as u32),
                     restored: None,
+                    extra: Map::new(),
                     seq: seq as u64,
+                    resuming: false,
                 },
             );
         }
@@ -338,10 +445,105 @@ mod lookup_tests {
     #[test]
     fn list_is_in_creation_order_not_hash_order() {
         let registry: Registry<u32> = Registry::new();
-        let ids: Vec<String> = (0..20).map(|i| registry.insert("a", None, i)).collect();
+        let ids: Vec<String> = (0..20)
+            .map(|i| registry.insert("a", None, None, i))
+            .collect();
 
         let listed: Vec<String> = registry.list().into_iter().map(|e| e.id).collect();
         assert_eq!(listed, ids);
         assert_eq!(registry.len(), 20);
+    }
+}
+
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+    use argus_reducer::Status;
+
+    /// A registry holding one session restored as lost, with a field from a
+    /// newer Argus. Handles are plain numbers; a number is "live" when odd.
+    fn with_lost_session() -> Registry<u32> {
+        let registry = Registry::new();
+        let mut extra = Map::new();
+        extra.insert("from_the_future".into(), Value::from(42));
+        registry.restore([SessionRecord {
+            id: "3fa1c2d4".into(),
+            agent: "claude-code".into(),
+            cwd: Some(PathBuf::from(r"C:\work")),
+            agent_session: Some("7c1d0a52-3c11-4b5e-9a0e-5f1b2d3c4e5f".into()),
+            created_unix_ms: 1_000,
+            status: Status::Done,
+            status_since_unix_ms: 2_000,
+            rule: None,
+            exit_code: None,
+            lost: true,
+            extra,
+        }]);
+        registry
+    }
+
+    fn is_live(handle: &u32) -> bool {
+        handle % 2 == 1
+    }
+
+    #[test]
+    fn a_resumed_session_keeps_its_id_place_and_unknown_fields() {
+        let registry = with_lost_session();
+        let claimed = registry.begin_resume("3fa1c2d4", is_live).unwrap();
+        assert_eq!(
+            claimed.agent_session.as_deref(),
+            Some("7c1d0a52-3c11-4b5e-9a0e-5f1b2d3c4e5f")
+        );
+
+        registry.finish_resume("3fa1c2d4", 1);
+
+        let entry = registry.find("3fa1c2d4").unwrap();
+        assert_eq!(entry.handle, Some(1));
+        assert!(entry.restored.is_none(), "no longer lost");
+        assert_eq!(entry.created_unix_ms, 1_000, "still listed where it was");
+        assert!(entry.started_unix_ms > entry.created_unix_ms);
+        assert_eq!(entry.extra["from_the_future"], 42);
+    }
+
+    #[test]
+    fn a_session_being_resumed_cannot_be_claimed_twice() {
+        let registry = with_lost_session();
+        registry.begin_resume("3fa1c2d4", is_live).unwrap();
+        assert_eq!(
+            registry.begin_resume("3fa1c2d4", is_live).map(|e| e.id),
+            Err(ResumeError::AlreadyResuming("3fa1c2d4".into()))
+        );
+    }
+
+    #[test]
+    fn a_failed_resume_can_be_tried_again() {
+        let registry = with_lost_session();
+        registry.begin_resume("3fa1c2d4", is_live).unwrap();
+        registry.abort_resume("3fa1c2d4");
+
+        let entry = registry.begin_resume("3fa1c2d4", is_live).unwrap();
+        assert!(entry.restored.is_some(), "an abort changes nothing else");
+    }
+
+    #[test]
+    fn a_live_session_is_not_resumed_but_a_finished_one_is() {
+        let registry: Registry<u32> = Registry::new();
+        let live = registry.insert("shell", None, None, 1);
+        let finished = registry.insert("shell", None, None, 2);
+
+        assert_eq!(
+            registry.begin_resume(&live, is_live).map(|e| e.id),
+            Err(ResumeError::Running(live.clone()))
+        );
+        assert!(registry.begin_resume(&finished, is_live).is_ok());
+    }
+
+    #[test]
+    fn resuming_takes_a_full_id_not_a_prefix() {
+        let registry = with_lost_session();
+        assert_eq!(
+            registry.begin_resume("3f", is_live).map(|e| e.id),
+            Err(ResumeError::NotFound("3f".into()))
+        );
     }
 }

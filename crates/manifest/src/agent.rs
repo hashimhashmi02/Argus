@@ -8,7 +8,7 @@ use argus_reducer::ScreenMatch;
 use regex::Regex;
 
 use crate::error::ManifestError;
-use crate::schema::{AgentManifest, Region, ScreenRule};
+use crate::schema::{AgentManifest, Region, SESSION_UUID, ScreenRule};
 
 /// An agent definition that is ready to use.
 ///
@@ -21,6 +21,17 @@ pub struct Agent {
     manifest: AgentManifest,
     /// Rules sorted by descending priority, with their patterns compiled.
     rules: Vec<CompiledRule>,
+    /// Whether any command line mentions [`SESSION_UUID`].
+    wants_session_uuid: bool,
+}
+
+/// Which command line to build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Start {
+    /// A fresh session: `launch.args` then `launch.new_session_args`.
+    New,
+    /// Reattach to earlier work: `launch.args` then `resume.args`.
+    Resume,
 }
 
 struct CompiledRule {
@@ -98,7 +109,22 @@ impl Agent {
         // of whichever sort implementation is in use.
         rules.sort_by_key(|compiled| Reverse(compiled.rule.priority));
 
-        Ok(Self { manifest, rules })
+        let mentions = |args: &[String]| args.iter().any(|arg| arg.contains(SESSION_UUID));
+        let launch = &manifest.launch;
+        let at_launch = mentions(&launch.args) || mentions(&launch.new_session_args);
+        let at_resume = manifest.resume.as_ref().is_some_and(|r| mentions(&r.args));
+        // Resuming by an id that no launch ever handed the agent would ask it
+        // for a conversation that cannot exist. Caught here, against the file,
+        // rather than as an agent's "no conversation found" days later.
+        if at_resume && !at_launch {
+            return Err(ManifestError::ResumeWithoutSessionUuid { id: manifest.id });
+        }
+
+        Ok(Self {
+            manifest,
+            rules,
+            wants_session_uuid: at_launch,
+        })
     }
 
     pub fn manifest(&self) -> &AgentManifest {
@@ -107,6 +133,36 @@ impl Agent {
 
     pub fn id(&self) -> &str {
         &self.manifest.id
+    }
+
+    /// Whether each session of this agent needs a conversation id of its own,
+    /// made up when it starts and kept for resuming it.
+    pub fn wants_session_uuid(&self) -> bool {
+        self.wants_session_uuid
+    }
+
+    /// Whether the manifest says how to reattach to earlier work at all.
+    pub fn can_resume(&self) -> bool {
+        self.manifest.resume.is_some()
+    }
+
+    /// The arguments to start a session with, `{session_uuid}` filled in.
+    ///
+    /// `None` for [`Start::Resume`] when the manifest has no `resume`. A
+    /// `session_uuid` of `None` leaves the placeholder as it is, which an agent
+    /// that wants one rejects loudly; a caller that knows the agent
+    /// [wants one](Self::wants_session_uuid) should not pass `None`.
+    pub fn args(&self, start: Start, session_uuid: Option<&str>) -> Option<Vec<String>> {
+        let launch = &self.manifest.launch;
+        let extra = match start {
+            Start::New => &launch.new_session_args,
+            Start::Resume => &self.manifest.resume.as_ref()?.args,
+        };
+        let fill = |arg: &String| match session_uuid {
+            Some(uuid) => arg.replace(SESSION_UUID, uuid),
+            None => arg.clone(),
+        };
+        Some(launch.args.iter().chain(extra).map(fill).collect())
     }
 
     /// Classify a screen.
