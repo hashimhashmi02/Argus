@@ -43,6 +43,7 @@ regex = "1"
 thiserror = "2"
 tokio = { version = "1", default-features = false }
 clap = { version = "4", features = ["derive"] }
+uuid = { version = "1", features = ["v4"] }
 
 [profile.release]
 # Argus is a long-lived daemon holding PTY handles. A panic that unwinds

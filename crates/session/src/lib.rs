@@ -59,8 +59,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::{Context, Result};
-use argus_manifest::Agent;
+use anyhow::{Context, Result, bail};
+use argus_manifest::{Agent, Start};
 use argus_pty::{ConPtyProcess, SpawnConfig};
 use tokio::sync::{mpsc, watch};
 
@@ -93,6 +93,7 @@ const COMMAND_DEPTH: usize = 32;
 pub struct Session {
     handle: SessionHandle,
     task: tokio::task::JoinHandle<()>,
+    agent_session: Option<String>,
 }
 
 impl Session {
@@ -102,8 +103,23 @@ impl Session {
     pub fn spawn(agent: Arc<Agent>, config: SessionConfig) -> Result<Self> {
         let manifest = agent.manifest();
 
+        let agent_session = match (&config.agent_session, config.start) {
+            (Some(id), _) => Some(id.clone()),
+            (None, _) if !agent.wants_session_uuid() => None,
+            (None, Start::New) => Some(uuid::Uuid::new_v4().to_string()),
+            // Making one up here would ask the agent for a conversation that
+            // never existed.
+            (None, Start::Resume) => bail!(
+                "agent `{}` resumes a conversation by its id, and none was given",
+                manifest.id
+            ),
+        };
+        let args = agent
+            .args(config.start, agent_session.as_deref())
+            .with_context(|| format!("agent `{}` has no `resume` in its manifest", manifest.id))?;
+
         let mut spawn_config = SpawnConfig::new(&manifest.launch.program)
-            .args(manifest.launch.args.clone())
+            .args(args)
             .size(config.cols, config.rows);
         spawn_config.scrub_env_prefixes = manifest.env_scrub_prefixes.clone();
         if let Some(cwd) = &config.cwd {
@@ -137,7 +153,16 @@ impl Session {
         Ok(Self {
             handle: SessionHandle::new(command_tx, snapshot_rx, started),
             task,
+            agent_session,
         })
+    }
+
+    /// The agent's own conversation id, if its manifest uses one.
+    ///
+    /// Made up at a fresh start, so whoever means to resume this session
+    /// later has to keep it.
+    pub fn agent_session(&self) -> Option<&str> {
+        self.agent_session.as_deref()
     }
 
     /// A cloneable handle for reading status and sending input.

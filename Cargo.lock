@@ -234,6 +234,7 @@ dependencies = [
  "argus-terminal-emu",
  "serde_json",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
