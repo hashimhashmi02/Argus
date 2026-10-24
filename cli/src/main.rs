@@ -133,6 +133,20 @@ enum Command {
 
     /// Stop a session. Killing one that has already finished succeeds.
     Kill { id: String },
+
+    /// Start a finished or lost session again, under the same id.
+    ///
+    /// Runs the agent's own resume command, in the folder the session ran in,
+    /// asking for the conversation it had. Only for agents whose manifest says
+    /// how to resume; `list` shows which sessions can be.
+    Resume {
+        /// Session id, or any prefix naming exactly one session.
+        id: String,
+
+        /// Terminal size, as COLSxROWS.
+        #[arg(long, value_name = "COLSxROWS", value_parser = parse_size)]
+        size: Option<(u16, u16)>,
+    },
 }
 
 /// `120x30` -> `(120, 30)`.
@@ -213,6 +227,11 @@ impl Command {
             Command::Deny { id } => Request::Respond { id, approve: false },
             Command::Resize { id, cols, rows } => Request::Resize { id, cols, rows },
             Command::Kill { id } => Request::Kill { id },
+            Command::Resume { id, size } => Request::Resume {
+                id,
+                cols: size.map(|(c, _)| c),
+                rows: size.map(|(_, r)| r),
+            },
             Command::Watch { id } => return Ok(Action::Watch { id }),
         }))
     }

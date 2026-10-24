@@ -268,6 +268,31 @@ async fn engine_errors_exit_1_with_the_code_named() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn resume_refuses_an_agent_that_cannot_and_takes_a_size() {
+    let engine = start("cli-resume");
+    let pipe = &engine.pipe;
+    let id = spawn(pipe).await;
+    cli(pipe, &["kill", &id]).await;
+    poll(pipe, &["list"], "the session to finish", |out| {
+        out.contains("done")
+    })
+    .await;
+
+    // The test shell's manifest has no `resume`: refused, exit 1, with why.
+    let refused = cli(pipe, &["resume", &id[..4], "--size", "100x30"]).await;
+    assert_eq!(refused.status.code(), Some(1));
+    let message = stderr(&refused);
+    assert!(
+        message.contains("no `resume`") && message.contains("BadRequest"),
+        "{message}"
+    );
+    assert!(!stdout(&cli(pipe, &["list"]).await).contains('*'));
+
+    let bad_size = cli(pipe, &["resume", &id, "--size", "wide"]).await;
+    assert_eq!(bad_size.status.code(), Some(2));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn no_engine_exits_3_with_a_hint() {
     // Distinct from exit 1, so a script can tell "the engine said no" from
     // "there is no engine to ask".
