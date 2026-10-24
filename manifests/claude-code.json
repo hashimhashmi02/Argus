@@ -49,7 +49,7 @@
     {
       "name": "input-box-idle",
       "status": "idle",
-      "pattern": "(?m)^─{20,}\\n>",
+      "pattern": "(?m)^─{20,}\\n[>❯]",
       "priority": 10,
       "region": { "last_lines": 8 }
     }

@@ -626,6 +626,21 @@ fn claude_at_an_empty_input_box_is_idle() {
 }
 
 #[test]
+fn claude_with_the_newer_chevron_prompt_is_idle() {
+    // Claude Code draws its input line as `❯ ` now, not `> `. Seen live on
+    // v2.1.142 under the engine: with only `>` accepted, an idle Claude read as
+    // working forever.
+    let screen = claude_bottom(&[], "❯");
+    let matched = claude().classify(&screen);
+    assert_eq!(
+        matched.status,
+        Some(Status::Idle),
+        "rule: {:?}",
+        matched.rule
+    );
+}
+
+#[test]
 fn claude_showing_its_placeholder_hint_is_idle() {
     let screen = claude_bottom(&[], r#"> Try "fix lint errors""#);
     assert_eq!(claude().classify(&screen).status, Some(Status::Idle));
