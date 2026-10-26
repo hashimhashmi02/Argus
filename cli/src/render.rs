@@ -79,7 +79,13 @@ pub fn session_table(sessions: &[SessionInfo]) -> String {
             [
                 s.id.clone(),
                 s.agent.clone(),
-                status(s),
+                // A mark rather than a column: only finished sessions can be
+                // resumed, so a column would be blank for every live one.
+                if s.resumable {
+                    format!("{}*", status(s))
+                } else {
+                    status(s)
+                },
                 duration(Duration::from_millis(s.status_for_ms)),
                 s.pid.map_or_else(|| "-".to_string(), |p| p.to_string()),
                 s.rule.clone().unwrap_or_else(|| "-".to_string()),
@@ -106,6 +112,9 @@ pub fn session_table(sessions: &[SessionInfo]) -> String {
         // The last column is not padded, so lines carry no trailing spaces.
         out.push_str(line.join("  ").trim_end());
         out.push('\n');
+    }
+    if sessions.iter().any(|s| s.resumable) {
+        out.push_str("\n* can be resumed with `argus-cli resume <id>`\n");
     }
     out
 }
@@ -181,6 +190,7 @@ mod tests {
             pid: Some(100),
             exit_code: None,
             lost: false,
+            resumable: false,
         }
     }
 
@@ -251,6 +261,21 @@ mod tests {
         assert_eq!(&lines[1][status_col..status_col + 9], "NEEDS YOU");
         assert_eq!(&lines[2][status_col..status_col + 4], "idle");
         assert!(lines.iter().all(|line| !line.ends_with(' ')));
+    }
+
+    #[test]
+    fn resumable_sessions_are_marked_with_a_footnote_saying_how() {
+        let mut lost = info("3fa1c2d4", Status::Done, 4);
+        lost.lost = true;
+        lost.resumable = true;
+        let live = info("9b0e1172", Status::Idle, 12);
+
+        let table = session_table(&[live.clone(), lost]);
+        assert!(table.contains("lost*"), "{table}");
+        assert!(table.contains("argus-cli resume <id>"), "{table}");
+
+        let plain = session_table(&[live]);
+        assert!(!plain.contains('*') && !plain.contains("resume"), "{plain}");
     }
 
     #[test]

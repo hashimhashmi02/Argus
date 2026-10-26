@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use argus_manifest::{Agent, ManifestError, key_bytes};
+use argus_manifest::{Agent, ManifestError, Start, key_bytes};
 use argus_reducer::Status;
 
 fn manifest_dir() -> PathBuf {
@@ -286,6 +286,96 @@ fn timing_overrides_the_reducer_policy() {
     assert_eq!(policy.blocker_debounce, std::time::Duration::ZERO);
 }
 
+/// A manifest with the given `launch` and `resume` objects.
+fn with_launch(launch: &str, resume: &str) -> String {
+    format!(
+        r#"{{
+          "id": "test",
+          "display_name": "Test",
+          "launch": {launch},
+          {resume}
+          "rules": [{{ "name": "r", "status": "idle", "pattern": "x" }}]
+        }}"#
+    )
+}
+
+#[test]
+fn a_fresh_start_adds_the_new_session_args_and_fills_in_the_uuid() {
+    let json = with_launch(
+        r#"{ "program": "agent", "args": ["--quiet"],
+             "new_session_args": ["--session-id", "{session_uuid}"] }"#,
+        r#""resume": { "args": ["--resume={session_uuid}"] },"#,
+    );
+    let agent = Agent::from_json(&json, "test.json").unwrap();
+
+    assert!(agent.wants_session_uuid());
+    assert!(agent.can_resume());
+    assert_eq!(
+        agent.args(Start::New, Some("1234")).unwrap(),
+        ["--quiet", "--session-id", "1234"]
+    );
+    // The resume args replace the new-session ones rather than following
+    // them, and the placeholder is filled in mid-argument too.
+    assert_eq!(
+        agent.args(Start::Resume, Some("1234")).unwrap(),
+        ["--quiet", "--resume=1234"]
+    );
+}
+
+#[test]
+fn an_agent_without_resume_cannot_build_a_resume_command() {
+    let json = with_launch(r#"{ "program": "agent", "args": ["-x"] }"#, "");
+    let agent = Agent::from_json(&json, "test.json").unwrap();
+
+    assert!(!agent.can_resume());
+    assert!(!agent.wants_session_uuid());
+    assert_eq!(agent.args(Start::New, None).unwrap(), ["-x"]);
+    assert_eq!(agent.args(Start::Resume, None), None);
+}
+
+#[test]
+fn resume_without_a_placeholder_needs_no_uuid() {
+    // `--continue`-style: resumes whatever was last, so nothing to remember.
+    let json = with_launch(
+        r#"{ "program": "agent" }"#,
+        r#""resume": { "args": ["--continue"] },"#,
+    );
+    let agent = Agent::from_json(&json, "test.json").unwrap();
+
+    assert!(agent.can_resume());
+    assert!(!agent.wants_session_uuid());
+    assert_eq!(agent.args(Start::Resume, None).unwrap(), ["--continue"]);
+}
+
+#[test]
+fn resuming_by_a_uuid_no_launch_provides_is_rejected() {
+    let json = with_launch(
+        r#"{ "program": "agent" }"#,
+        r#""resume": { "args": ["--resume", "{session_uuid}"] },"#,
+    );
+    assert!(matches!(
+        Agent::from_json(&json, "test.json"),
+        Err(ManifestError::ResumeWithoutSessionUuid { .. })
+    ));
+}
+
+#[test]
+fn the_claude_code_manifest_resumes_the_conversation_it_started() {
+    let agent = Agent::from_path(manifest_dir().join("claude-code.json")).unwrap();
+
+    assert!(agent.wants_session_uuid());
+    assert_eq!(
+        agent.args(Start::New, Some("u")).unwrap(),
+        ["--session-id", "u"]
+    );
+    // Not `--continue`: that is "the latest conversation in this folder", and
+    // two sessions sharing a folder would resume into the same one.
+    assert_eq!(
+        agent.args(Start::Resume, Some("u")).unwrap(),
+        ["--resume", "u"]
+    );
+}
+
 #[test]
 fn every_shipped_manifest_loads() {
     // A broken pattern in a manifest we ship should fail the build, not a
@@ -533,6 +623,21 @@ fn claude_at_an_empty_input_box_is_idle() {
         matched.rule
     );
     assert_eq!(matched.rule.as_deref(), Some("input-box-idle"));
+}
+
+#[test]
+fn claude_with_the_newer_chevron_prompt_is_idle() {
+    // Claude Code draws its input line as `❯ ` now, not `> `. Seen live on
+    // v2.1.142 under the engine: with only `>` accepted, an idle Claude read as
+    // working forever.
+    let screen = claude_bottom(&[], "❯");
+    let matched = claude().classify(&screen);
+    assert_eq!(
+        matched.status,
+        Some(Status::Idle),
+        "rule: {:?}",
+        matched.rule
+    );
 }
 
 #[test]

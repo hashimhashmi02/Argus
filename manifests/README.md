@@ -14,12 +14,30 @@ duplicate rule name fails CI rather than a session.
 |---|---|
 | `id` | Stable identifier used on the command line and in the registry. |
 | `display_name` | What the UI shows. |
-| `launch.program` / `launch.args` | How to start it. |
-| `resume.args` | Appended to the launch command to reattach to previous work. Omit if the CLI cannot resume. |
+| `launch.program` / `launch.args` | How to start it, fresh or resumed. |
+| `launch.new_session_args` | Appended to `launch.args` for a fresh session only. |
+| `resume.args` | Appended to `launch.args`, in place of `new_session_args`, to reattach to previous work. Omit if the CLI cannot resume. |
 | `env_scrub_prefixes` | Environment variables to strip before spawning, matched by prefix, case-insensitively. |
 | `keys.approve` / `keys.deny` | What to send to answer a prompt. |
 | `timing.idle_debounce_ms` | Override how long an idle screen must persist before the session is called idle. |
 | `rules` | Screen-match rules, below. |
+
+### Resuming
+
+`{session_uuid}` in any argument is replaced by a UUID Argus makes up when a
+session starts and keeps in its state file, so that resuming can ask for the
+same conversation back:
+
+```json
+"launch": { "program": "claude", "new_session_args": ["--session-id", "{session_uuid}"] },
+"resume": { "args": ["--resume", "{session_uuid}"] }
+```
+
+Prefer this over "resume the latest" (`claude --continue`) wherever the CLI
+allows it. Argus runs agents side by side, often in one folder, and "the
+latest" would resume every one of them into the same conversation. A manifest
+whose `resume.args` uses `{session_uuid}` but whose launch never does is
+rejected at load time: nothing would ever have been given that id.
 
 ### Keys
 
@@ -96,14 +114,16 @@ under the engine:
 
 | Rule | Status |
 |---|---|
-| `input-box-idle` | Verified. The input box is a `>` line between two horizontal rules. |
+| `input-box-idle` | Verified. The input box is a `❯` line (`>` in earlier releases) between two horizontal rules. |
 | `busy-spinner` | Verified. The spinner is a glyph and a verb ending in `…` (`· Manifesting…`); the finished-turn summary (`✻ Churned for 2s`) has no ellipsis and correctly does not match. |
 | `permission-prompt`, `trust-prompt`, `numbered-choice` | **Not yet seen live.** Reaching a permission prompt needs a logged-in `claude`, and the test session's login had expired. |
+| `new_session_args` / `resume` | Verified: a session started with `--session-id`, lost in an engine crash and resumed with `--resume`, comes back showing the conversation it had. |
 
-The first versions of both verified rules were wrong in ways no fixture would
-have caught: the idle rule expected a `│ >` bordered box that no longer exists,
-so an idle Claude read as working forever. Treat any misclassification as a bug
-in this file first, and check against a real session:
+The idle rule has been wrong twice in ways no fixture would have caught: first
+it expected a `│ >` bordered box that no longer exists, then Claude Code
+changed its prompt from `>` to `❯`. Both times an idle Claude read as working
+forever. Treat any misclassification as a bug in this file first, and check
+against a real session:
 
 ```bash
 .\scripts\demo.ps1 -WithClaude

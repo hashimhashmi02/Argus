@@ -3,10 +3,11 @@
   "display_name": "Claude Code",
   "launch": {
     "program": "claude",
-    "args": []
+    "args": [],
+    "new_session_args": ["--session-id", "{session_uuid}"]
   },
   "resume": {
-    "args": ["--continue"]
+    "args": ["--resume", "{session_uuid}"]
   },
   "env_scrub_prefixes": ["ARGUS_"],
   "keys": {
@@ -48,7 +49,7 @@
     {
       "name": "input-box-idle",
       "status": "idle",
-      "pattern": "(?m)^─{20,}\\n>",
+      "pattern": "(?m)^─{20,}\\n[>❯]",
       "priority": 10,
       "region": { "last_lines": 8 }
     }

@@ -278,6 +278,21 @@ pub async fn kill_session(pipe: State<'_, Pipe>, id: String) -> Result<()> {
     Ok(())
 }
 
+/// Start a finished session again under its own id. No size: the pane resizes
+/// the session to fit as soon as it is zoomed, as it does for a new one.
+#[tauri::command]
+pub async fn resume_session(pipe: State<'_, Pipe>, id: String) -> Result<SessionInfo> {
+    let request = Request::Resume {
+        id,
+        cols: None,
+        rows: None,
+    };
+    match call(&pipe, request).await? {
+        Reply::Session { session } => Ok(session),
+        other => Err(unexpected(other)),
+    }
+}
+
 /// Start the engine as a detached background process.
 #[tauri::command]
 pub async fn start_engine(

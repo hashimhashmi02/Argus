@@ -17,6 +17,8 @@ argus-terminal-emu = { path = "../terminal-emu" }
 # keeps debounce timers advancing while a child is silent, and "rt" because the
 # session is a task. "macros" is for `select!`.
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
+# A fresh conversation id for agents whose manifest uses `{session_uuid}`.
+uuid.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

@@ -55,16 +55,38 @@ pub struct AgentManifest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Launch {
     pub program: String,
+
+    /// Arguments for every start, fresh or resumed.
     #[serde(default)]
     pub args: Vec<String>,
+
+    /// Arguments appended to `args` for a fresh session only, never a resumed
+    /// one.
+    ///
+    /// Exists for agents that can be told which conversation a new session is
+    /// -- `claude --session-id {session_uuid}` -- and that refuse to be told
+    /// again on the way back in, where `--resume` already says it.
+    #[serde(default)]
+    pub new_session_args: Vec<String>,
 }
 
 /// How to resume a previous session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Resume {
-    /// Arguments appended to the launch command to reattach.
+    /// Arguments appended to `launch.args` to reattach, in place of
+    /// `launch.new_session_args`.
     pub args: Vec<String>,
 }
+
+/// Replaced, wherever it appears in an argument, by the id of the agent's own
+/// conversation: a UUID Argus makes up when the session is first started and
+/// remembers, so that it can ask for that same conversation back.
+///
+/// The only placeholder there is. An agent that resumes "the latest
+/// conversation in this folder" -- `claude --continue` -- needs none, but then
+/// two sessions sharing a folder resume into one conversation, which is the
+/// problem this exists to solve.
+pub const SESSION_UUID: &str = "{session_uuid}";
 
 /// Per-agent overrides for the reducer's debounce policy.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -3,12 +3,24 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use argus_manifest::Start;
+
 /// Terminal size and timing for one session.
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
     /// Working directory for the child. In the finished system this is the
     /// agent's git worktree.
     pub cwd: Option<PathBuf>,
+
+    /// A fresh session, or a resumed one.
+    pub start: Start,
+
+    /// The agent's own conversation id, filled in for `{session_uuid}`.
+    ///
+    /// Left `None` for a fresh session, one is made up if the manifest wants
+    /// it -- see [`Session::agent_session`](crate::Session::agent_session).
+    /// Resuming needs the one the session was started with.
+    pub agent_session: Option<String>,
 
     pub cols: u16,
     pub rows: u16,
@@ -30,6 +42,8 @@ impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             cwd: None,
+            start: Start::New,
+            agent_session: None,
             cols: 120,
             rows: 30,
             // Comfortably finer than the 750ms default idle debounce, so the
@@ -43,6 +57,14 @@ impl Default for SessionConfig {
 impl SessionConfig {
     pub fn cwd(mut self, dir: impl Into<PathBuf>) -> Self {
         self.cwd = Some(dir.into());
+        self
+    }
+
+    /// Reattach to earlier work through the manifest's `resume.args`, asking
+    /// for the conversation `agent_session` if the manifest resumes by id.
+    pub fn resume(mut self, agent_session: Option<String>) -> Self {
+        self.start = Start::Resume;
+        self.agent_session = agent_session;
         self
     }
 

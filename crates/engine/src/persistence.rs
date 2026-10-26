@@ -155,19 +155,21 @@ fn record_for(entry: &Entry<SessionHandle>) -> SessionRecord {
                 id: entry.id.clone(),
                 agent: entry.agent.clone(),
                 cwd: entry.cwd.clone(),
+                agent_session: entry.agent_session.clone(),
                 created_unix_ms: entry.created_unix_ms,
                 status: snapshot.status,
-                // Creation time plus the offset at which the status began --
+                // Process start plus the offset at which the status began --
                 // both fixed once the status is entered. Computing it as "now
                 // minus how long it has held" would drift by a millisecond or
                 // two on every call, the file would never compare equal to the
                 // last one written, and an idle engine would rewrite it every
-                // second forever.
-                status_since_unix_ms: entry.created_unix_ms + since_spawn,
+                // second forever. The process start, not the creation time: a
+                // resumed session's offsets count from its new process.
+                status_since_unix_ms: entry.started_unix_ms + since_spawn,
                 rule: snapshot.rule,
                 exit_code: snapshot.exit_code,
                 lost: false,
-                extra: Map::new(),
+                extra: entry.extra.clone(),
             }
         }
         // Remembered from a previous run: written back exactly as read,
@@ -177,6 +179,7 @@ fn record_for(entry: &Entry<SessionHandle>) -> SessionRecord {
             id: entry.id.clone(),
             agent: entry.agent.clone(),
             cwd: entry.cwd.clone(),
+            agent_session: entry.agent_session.clone(),
             created_unix_ms: entry.created_unix_ms,
             status: argus_reducer::Status::Done,
             status_since_unix_ms: entry.created_unix_ms,

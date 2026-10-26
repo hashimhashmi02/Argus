@@ -45,6 +45,31 @@ fn manifest_json() -> String {
     )
 }
 
+/// A `cmd.exe` that can be resumed, and says on screen which way it started
+/// and with which conversation id.
+fn resumable_manifest_json() -> String {
+    format!(
+        r#"{{
+          "id": "test-resumable",
+          "display_name": "Test Resumable",
+          "launch": {{
+            "program": {program},
+            "new_session_args": ["/k", "echo", "new", "{{session_uuid}}"]
+          }},
+          "resume": {{ "args": ["/k", "echo", "resumed", "{{session_uuid}}"] }},
+          "rules": [
+            {{
+              "name": "cmd-prompt",
+              "status": "idle",
+              "pattern": "(?m)^[A-Za-z]:\\\\[^\\n]*>$",
+              "region": {{ "last_lines": 1 }}
+            }}
+          ]
+        }}"#,
+        program = serde_json::to_string(&cmd_exe()).unwrap(),
+    )
+}
+
 /// A scratch directory holding a manifest directory and a state file path.
 struct Scratch {
     dir: PathBuf,
@@ -63,6 +88,11 @@ impl Scratch {
         fs::write(
             dir.join("manifests").join("test-shell.json"),
             manifest_json(),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("manifests").join("test-resumable.json"),
+            resumable_manifest_json(),
         )
         .unwrap();
         Self { dir }
@@ -325,6 +355,156 @@ async fn the_session_list_survives_a_crash() {
     engine.crash();
 }
 
+async fn spawn_in(client: &mut Client, agent: &str, cwd: Option<&Path>) -> String {
+    match client
+        .call(Request::Spawn {
+            agent: agent.into(),
+            cwd: cwd.map(|dir| dir.display().to_string()),
+            cols: None,
+            rows: None,
+        })
+        .await
+        .unwrap()
+    {
+        Reply::Session { session } => session.id,
+        other => panic!("unexpected reply {other:?}"),
+    }
+}
+
+async fn screen_text(client: &mut Client, id: &str) -> String {
+    match client
+        .call(Request::ReadScreen { id: id.into() })
+        .await
+        .unwrap()
+    {
+        Reply::Screen { screen } => screen.lines.join("\n"),
+        other => panic!("unexpected reply {other:?}"),
+    }
+}
+
+async fn resume(client: &mut Client, id: &str) -> Result<SessionInfo, ClientError> {
+    client
+        .call(Request::Resume {
+            id: id.into(),
+            cols: None,
+            rows: None,
+        })
+        .await
+        .map(|reply| match reply {
+            Reply::Session { session } => session,
+            other => panic!("unexpected reply {other:?}"),
+        })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lost_session_is_resumed_under_its_own_id_in_its_own_folder() {
+    let scratch = Scratch::new("resume");
+    let pipe = unique_pipe_name("restart-resume");
+    let workdir = scratch.dir.join("the project");
+    fs::create_dir_all(&workdir).unwrap();
+
+    // ---- first life ---------------------------------------------------------
+    let mut engine = EngineProcess::start(&scratch, &pipe);
+    let mut client = engine.connect().await;
+
+    let resumable = spawn_in(&mut client, "test-resumable", Some(&workdir)).await;
+    // No folder asked for: the engine records its own, so a later resume does
+    // not depend on where the next engine happens to start.
+    let shell = spawn_in(&mut client, "test-shell", None).await;
+    wait_status(&mut client, &resumable, Status::Idle).await;
+    wait_status(&mut client, &shell, Status::Idle).await;
+
+    let state = wait_file(&scratch.state(), "a conversation id", |state| {
+        session_in_file(state, &resumable).is_some_and(|s| s["agent_session"].is_string())
+            && session_in_file(state, &shell).is_some()
+    })
+    .await;
+    let uuid = session_in_file(&state, &resumable).unwrap()["agent_session"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        screen_text(&mut client, &resumable)
+            .await
+            .contains(&format!("new {uuid}"))
+    );
+    let shell_record = session_in_file(&state, &shell).unwrap();
+    assert!(
+        shell_record.get("agent_session").is_none(),
+        "the shell's manifest has no use for one"
+    );
+    assert!(Path::new(shell_record["cwd"].as_str().expect("the engine's folder")).is_absolute());
+
+    drop(client);
+    engine.crash();
+
+    // ---- second life --------------------------------------------------------
+    let mut engine = EngineProcess::start(&scratch, &pipe);
+    let mut client = engine.connect().await;
+    let sessions = list(&mut client).await;
+    let find = |id: &str| sessions.iter().find(|s| s.id == id).unwrap().clone();
+    assert!(find(&resumable).lost && find(&resumable).resumable);
+    assert!(find(&shell).lost && !find(&shell).resumable);
+
+    // Typing at it says how to bring it back.
+    match client
+        .call(Request::SendText {
+            id: resumable.clone(),
+            text: "dir\r".into(),
+        })
+        .await
+    {
+        Err(ClientError::Rpc(error)) => {
+            assert!(error.message.contains("resume"), "{}", error.message);
+        }
+        other => panic!("expected an error, got {other:?}"),
+    }
+
+    // An agent with no `resume` is refused, and says why.
+    match resume(&mut client, &shell).await {
+        Err(ClientError::Rpc(error)) => {
+            assert!(error.message.contains("no `resume`"), "{}", error.message);
+        }
+        other => panic!("expected an error, got {other:?}"),
+    }
+
+    // By prefix, like every other call.
+    let back = resume(&mut client, &resumable[..5]).await.unwrap();
+    assert_eq!(back.id, resumable, "the same session, not a new one");
+    assert!(!back.lost && !back.resumable);
+    let pid = back.pid.expect("a live process");
+
+    wait_status(&mut client, &resumable, Status::Idle).await;
+    let screen = screen_text(&mut client, &resumable).await;
+    assert!(
+        screen.contains(&format!("resumed {uuid}")),
+        "asked for the conversation it started with:\n{screen}"
+    );
+    assert!(!screen.contains("new "), "{screen}");
+    assert!(
+        screen.contains("the project>"),
+        "running in the folder it ran in before:\n{screen}"
+    );
+
+    // Resuming something already running changes nothing.
+    assert_eq!(
+        resume(&mut client, &resumable).await.unwrap().pid,
+        Some(pid)
+    );
+    assert_eq!(list(&mut client).await.len(), 2);
+
+    // And it is written down as live, with the same conversation id.
+    wait_file(&scratch.state(), "the resumed session", |state| {
+        session_in_file(state, &resumable).is_some_and(|s| {
+            s["status"] == "idle" && s.get("lost").is_none() && s["agent_session"] == uuid.as_str()
+        })
+    })
+    .await;
+
+    drop(client);
+    engine.crash();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_corrupt_state_file_is_quarantined_and_the_engine_still_starts() {
     let scratch = Scratch::new("corrupt");
@@ -448,4 +628,55 @@ async fn an_unchanged_registry_is_not_rewritten() {
 
     let _ = client.call(Request::Kill { id }).await;
     let _ = stop.send(());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_that_exited_can_be_resumed_and_racing_resumes_start_it_once() {
+    let scratch = Scratch::new("resume-race");
+    let pipe = unique_pipe_name("restart-resume-race");
+    let mut engine = EngineProcess::start(&scratch, &pipe);
+    let mut client = engine.connect().await;
+
+    let id = spawn_in(&mut client, "test-resumable", Some(&scratch.dir)).await;
+    wait_status(&mut client, &id, Status::Idle).await;
+    client
+        .call(Request::SendText {
+            id: id.clone(),
+            text: "exit\r".into(),
+        })
+        .await
+        .unwrap();
+    let exited = wait_status(&mut client, &id, Status::Done).await;
+    assert!(!exited.lost, "it exited; nothing was lost");
+    assert!(exited.resumable, "but it can still be brought back");
+
+    // Two clients, at once.
+    let mut other = engine.connect().await;
+    let (first, second) = tokio::join!(resume(&mut client, &id), resume(&mut other, &id));
+
+    // Whichever lost the race was either refused while the other was starting
+    // it, or answered with the session the other had started. Never a second
+    // process.
+    let pids: Vec<u32> = [first, second]
+        .into_iter()
+        .filter_map(|result| match result {
+            Ok(session) => Some(session.pid.expect("live")),
+            Err(ClientError::Rpc(error)) => {
+                assert!(
+                    error.message.contains("already being resumed"),
+                    "{}",
+                    error.message
+                );
+                None
+            }
+            Err(other) => panic!("unexpected error {other}"),
+        })
+        .collect();
+    assert!(!pids.is_empty());
+    assert!(pids.iter().all(|&pid| pid == pids[0]), "{pids:?}");
+    let live = wait_status(&mut client, &id, Status::Idle).await;
+    assert_eq!(live.pid, Some(pids[0]));
+
+    drop((client, other));
+    engine.crash();
 }

@@ -106,6 +106,24 @@ pub enum Request {
     ///
     /// Additive, like `Agents`: an older engine answers `bad_request`.
     Watch { id: String },
+
+    /// Start a finished session again, through its manifest's `resume.args`,
+    /// in the folder it ran in and with the conversation it had.
+    ///
+    /// The session keeps its id and its place in the list; the reply is the
+    /// session, live again. A session still running is returned as it is --
+    /// the caller wanted it running, and it is. One that cannot be resumed
+    /// (see [`SessionInfo::resumable`]) is refused with `bad_request` and the
+    /// reason.
+    ///
+    /// Additive, like `Agents`: an older engine answers `bad_request`.
+    Resume {
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cols: Option<u16>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rows: Option<u16>,
+    },
 }
 
 /// The answer to one request.
@@ -233,6 +251,14 @@ pub struct SessionInfo {
     /// absent, so no version bump.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub lost: bool,
+    /// The session has finished and [`Request::Resume`] would start it again:
+    /// its agent says how to resume, and the engine knows the folder (and,
+    /// where the agent needs it, the conversation) to resume it in.
+    ///
+    /// Decided by the engine so that a client only has to show it. Additive,
+    /// like `lost`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resumable: bool,
 }
 
 /// An emulated screen, as text.

@@ -411,3 +411,71 @@ async fn a_finished_session_closes_its_stream_and_cannot_be_watched() {
         .unwrap();
     assert!(handle.watch().await.is_none(), "nothing left to watch");
 }
+
+/// A `cmd.exe` that says which way it was started, and with which
+/// conversation id.
+fn resumable_agent() -> Arc<Agent> {
+    let json = format!(
+        r#"{{
+          "id": "test-resumable",
+          "display_name": "Test Resumable",
+          "launch": {{
+            "program": {program},
+            "new_session_args": ["/k", "echo", "new", "{{session_uuid}}"]
+          }},
+          "resume": {{ "args": ["/k", "echo", "resumed", "{{session_uuid}}"] }},
+          "rules": [{{ "name": "any", "status": "idle", "pattern": "\\S" }}]
+        }}"#,
+        program = serde_json::to_string(&cmd_exe()).unwrap(),
+    );
+    Arc::new(Agent::from_json(&json, "test-resumable.json").expect("test manifest should be valid"))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fresh_session_is_given_a_conversation_id_and_passes_it_on() {
+    let session = Session::spawn(resumable_agent(), SessionConfig::default()).unwrap();
+    let uuid = session
+        .agent_session()
+        .expect("the manifest uses {session_uuid}, so one is made up")
+        .to_string();
+    assert_eq!(uuid.len(), 36, "a UUID, as Claude Code requires: {uuid}");
+
+    let mut handle = session.handle();
+    wait_for(&mut handle, "the new-session line", |s| {
+        s.screen.text().contains(&format!("new {uuid}"))
+    })
+    .await;
+    handle.kill().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_resumed_session_asks_for_the_conversation_it_was_given() {
+    let config = SessionConfig::default().resume(Some("abc-123".into()));
+    let session = Session::spawn(resumable_agent(), config).unwrap();
+    assert_eq!(session.agent_session(), Some("abc-123"));
+
+    let mut handle = session.handle();
+    let snapshot = wait_for(&mut handle, "the resumed line", |s| {
+        s.screen.text().contains("resumed abc-123")
+    })
+    .await;
+    assert!(
+        !snapshot.screen.text().contains("new "),
+        "resuming replaces the new-session arguments rather than adding to them"
+    );
+    handle.kill().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resuming_without_an_id_or_without_a_resume_command_is_refused() {
+    let no_id = Session::spawn(resumable_agent(), SessionConfig::default().resume(None));
+    let error = format!(
+        "{:#}",
+        no_id.err().expect("needs the id it was started with")
+    );
+    assert!(error.contains("none was given"), "{error}");
+
+    let no_resume = Session::spawn(shell_agent(), SessionConfig::default().resume(None));
+    let error = format!("{:#}", no_resume.err().expect("the shell cannot resume"));
+    assert!(error.contains("no `resume`"), "{error}");
+}

@@ -9,10 +9,11 @@ and which is **done**.
 
 Windows-native, written in Rust, built on [ConPTY](https://devblogs.microsoft.com/commandline/windows-command-line-introducing-the-windows-pseudo-console-conpty/).
 
-> **Status: early.** Step 8b, the last of the first build order. The engine runs
-> as a daemon, a desktop app and `argus-cli` both drive it, and the session list
-> survives an engine restart. The app tiles every agent's screen, and a zoomed
-> pane is the agent's real terminal, live and typeable.
+> **Status: early.** Step 9. The engine runs as a daemon, a desktop app and
+> `argus-cli` both drive it, and the session list survives an engine restart. A
+> session lost in a crash can be resumed, back into the same conversation. The
+> app tiles every agent's screen, and a zoomed pane is the agent's real terminal,
+> live and typeable.
 > See [DESIGN.md](DESIGN.md) for the architecture and the build order.
 
 ## Why
@@ -54,6 +55,7 @@ and the status line along the bottom flags each one: `!` needs you, `#` working,
 | `:` | Type one line into the pane |
 | `c` | Start a new session |
 | `x` | Kill the pane's session, after asking |
+| `r` | Resume the pane's finished or lost session |
 
 A zoomed pane is the agent's real terminal, in full colour. Press `i` or click
 it, and everything you type goes to the agent, Esc and Ctrl+C included. To get
@@ -119,6 +121,7 @@ ids accepted by any unique prefix:
 | `resize <id> <cols> <rows>` | Change its terminal size |
 | `watch <id>` | Mirror its terminal here, live and in colour, read-only, until it ends or Ctrl+C |
 | `kill <id>` | Stop it |
+| `resume <id>` | Start a finished or lost session again, same id, same folder, same conversation |
 
 Add `--json` to any command for the engine's raw reply. Exit codes are 0 for
 success, 1 if the engine refused, 2 for bad usage, and 3 if no engine is
@@ -133,6 +136,12 @@ ID        AGENT  STATUS    FOR  PID  RULE
 00efdcf5  shell  done (0)  4s   -    -
 b90097bc  shell  lost      0s   -    -
 ```
+
+A lost session whose agent can resume is marked `*` in the list, and
+`resume <id>` brings it back under the same id. For Claude Code that is the same
+conversation, not just the latest one in the folder: Argus starts every Claude
+session with a conversation id of its own and asks for that id back. See
+[DESIGN.md](DESIGN.md#resuming-a-session).
 
 If the state file is ever unreadable, it is moved aside — never overwritten — and
 the engine says where it went.

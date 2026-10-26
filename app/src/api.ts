@@ -20,6 +20,8 @@ export interface SessionInfo {
   exit_code?: number;
   /** Running when a previous engine stopped; its process went with it. */
   lost?: boolean;
+  /** Finished, and `resume` would start it again under the same id. */
+  resumable?: boolean;
 }
 
 export interface ScreenView {
@@ -77,5 +79,6 @@ export const api = {
   unwatch: (watch: number) => invoke<void>("unwatch_session", { watch }),
   respond: (id: string, approve: boolean) => invoke<void>("respond", { id, approve }),
   kill: (id: string) => invoke<void>("kill_session", { id }),
+  resume: (id: string) => invoke<SessionInfo>("resume_session", { id }),
   startEngine: () => invoke<void>("start_engine"),
 };

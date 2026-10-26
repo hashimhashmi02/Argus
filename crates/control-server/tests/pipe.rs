@@ -49,6 +49,7 @@ fn fake(id: &str) -> SessionInfo {
         pid: None,
         exit_code: None,
         lost: false,
+        resumable: false,
     }
 }
 

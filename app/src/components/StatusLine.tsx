@@ -17,7 +17,16 @@ export interface Message {
 export type Engine = { state: "up" } | { state: "down" } | { state: "error"; message: string };
 
 /** What a hint in the status line runs when clicked: the same as its key. */
-export type Command = "zoom" | "unzoom" | "new" | "send" | "kill" | "start" | "type" | "detach";
+export type Command =
+  | "zoom"
+  | "unzoom"
+  | "new"
+  | "send"
+  | "kill"
+  | "resume"
+  | "start"
+  | "type"
+  | "detach";
 
 interface Props {
   list: SessionInfo[];
@@ -116,6 +125,7 @@ export function StatusLine(props: Props) {
 function Hints({ engine, list, zoomed, current, typing, prefix, onCommand }: Props) {
   const hints: [key: string, label: string, command: Command][] = [];
   const live = list.some((s) => s.id === current && s.status !== "done");
+  const resumable = list.some((s) => s.id === current && s.resumable);
   if (engine.state === "down") {
     hints.push(["s", "start engine", "start"]);
   } else if (typing) {
@@ -125,6 +135,7 @@ function Hints({ engine, list, zoomed, current, typing, prefix, onCommand }: Pro
     if (zoomed) hints.push(["esc", "tile", "unzoom"]);
     else if (current) hints.push(["enter", "zoom", "zoom"]);
     if (live) hints.push(["i", "type", "type"]);
+    if (resumable) hints.push(["r", "resume", "resume"]);
     hints.push(["c", "new", "new"]);
     if (live) hints.push([":", "send", "send"], ["x", "kill", "kill"]);
   }

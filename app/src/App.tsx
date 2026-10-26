@@ -142,6 +142,20 @@ export default function App() {
     }
   }, [starting, say, fail, sessions, agents]);
 
+  const resume = useCallback(
+    async (id: string) => {
+      say(`resuming ${id}`);
+      try {
+        await api.resume(id);
+        setMessage(undefined);
+        sessions.refresh();
+      } catch (err) {
+        fail(err);
+      }
+    },
+    [say, fail, sessions],
+  );
+
   const toggleZoom = useCallback(
     (id: string) => apply(viewRef.current.zoomed ? { type: "unzoom" } : { type: "zoom", id }),
     [apply],
@@ -180,12 +194,17 @@ export default function App() {
         case "kill":
           if (live) setPrompt({ kind: "kill", id: currentSession.id });
           break;
+        case "resume":
+          // No confirmation: it starts the agent again, in the folder and
+          // conversation it had -- nothing is lost by doing it by mistake.
+          if (currentSession?.resumable) resume(currentSession.id);
+          break;
         case "start":
           startEngine();
           break;
       }
     },
-    [apply, current, currentSession, notRunning, startEngine, zoomed],
+    [apply, current, currentSession, notRunning, resume, startEngine, zoomed],
   );
 
   // The key typed after the terminal's prefix (Ctrl+B), as tmux binds them.
@@ -278,6 +297,8 @@ export default function App() {
         run("new");
       } else if (e.key === "x") {
         run("kill");
+      } else if (e.key === "r") {
+        run("resume");
       } else if (e.key === ":") {
         run("send");
       } else if (e.key === "i") {
@@ -440,6 +461,7 @@ function NoSessions({ loading, onNew }: { loading: boolean; onNew: () => void })
     ["C-b z", "", "stop typing and tile every pane again"],
     [":", "send-keys", "type one line into the current pane"],
     ["x", "kill-pane", "stop the current session, after asking"],
+    ["r", "respawn-pane", "start a finished or lost session again, where it left off"],
   ];
   return (
     <div className="notice">

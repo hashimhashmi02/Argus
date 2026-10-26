@@ -29,6 +29,7 @@ fn record(id: &str, status: Status) -> SessionRecord {
         id: id.into(),
         agent: "shell".into(),
         cwd: Some(PathBuf::from(r"C:\work")),
+        agent_session: None,
         created_unix_ms: 1_700_000_000_000,
         status,
         status_since_unix_ms: 1_700_000_005_000,
@@ -209,6 +210,29 @@ fn fields_from_a_newer_argus_survive_a_load_and_save() {
     assert_eq!(after["sessions"][0]["tags"], json!(["urgent"]));
 }
 
+#[test]
+fn a_conversation_id_round_trips_and_older_files_load_without_one() {
+    let path = scratch_dir("agent-session").join("state.json");
+    let mut with_id = record("3fa1c2d4", Status::Idle);
+    with_id.agent_session = Some("7c1d0a52-3c11-4b5e-9a0e-5f1b2d3c4e5f".into());
+    let state = StateFile {
+        format: STATE_FORMAT,
+        sessions: vec![with_id.clone(), record("9b0e1172", Status::Done)],
+        extra: Map::new(),
+    };
+    save(&path, &state).unwrap();
+
+    let text = fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        text.matches("agent_session").count(),
+        1,
+        "omitted when there is none, so files from before step 9 look the same"
+    );
+    let loaded = load(&path).unwrap().state;
+    assert_eq!(loaded.sessions[0], with_id);
+    assert_eq!(loaded.sessions[1].agent_session, None);
+}
+
 // ---- restoring --------------------------------------------------------------
 
 #[test]
@@ -240,7 +264,7 @@ fn restored_sessions_keep_their_ids_and_order() {
     newer.created_unix_ms = 2;
 
     assert_eq!(registry.restore([newer, older]), 2);
-    let new_id = registry.insert("shell", None, ());
+    let new_id = registry.insert("shell", None, None, ());
 
     let ids: Vec<String> = registry.list().into_iter().map(|e| e.id).collect();
     assert_eq!(ids, ["aaaa1111", "bbbb2222", new_id.as_str()]);
