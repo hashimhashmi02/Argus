@@ -10,3 +10,6 @@
 .idea/
 Thumbs.db
 desktop.ini
+
+# Release packages built by scripts/package.ps1
+/dist/
