@@ -30,6 +30,7 @@ fn record(id: &str, status: Status) -> SessionRecord {
         agent: "shell".into(),
         cwd: Some(PathBuf::from(r"C:\work")),
         agent_session: None,
+        branch: None,
         created_unix_ms: 1_700_000_000_000,
         status,
         status_since_unix_ms: 1_700_000_005_000,
@@ -264,7 +265,7 @@ fn restored_sessions_keep_their_ids_and_order() {
     newer.created_unix_ms = 2;
 
     assert_eq!(registry.restore([newer, older]), 2);
-    let new_id = registry.insert("shell", None, None, ());
+    let new_id = registry.insert("shell", None, None, None, ());
 
     let ids: Vec<String> = registry.list().into_iter().map(|e| e.id).collect();
     assert_eq!(ids, ["aaaa1111", "bbbb2222", new_id.as_str()]);

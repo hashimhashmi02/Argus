@@ -186,6 +186,7 @@ async fn spawn(client: &mut Client) -> String {
             cwd: None,
             cols: None,
             rows: None,
+            worktree: None,
         })
         .await
         .unwrap()
@@ -362,6 +363,7 @@ async fn spawn_in(client: &mut Client, agent: &str, cwd: Option<&Path>) -> Strin
             cwd: cwd.map(|dir| dir.display().to_string()),
             cols: None,
             rows: None,
+            worktree: None,
         })
         .await
         .unwrap()

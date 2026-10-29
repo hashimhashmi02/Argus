@@ -72,11 +72,19 @@ pub fn session_table(sessions: &[SessionInfo]) -> String {
         return "no sessions -- start one with `argus-cli spawn <agent>`\n".to_string();
     }
 
-    let header = ["ID", "AGENT", "STATUS", "FOR", "PID", "RULE"].map(String::from);
-    let rows: Vec<[String; 6]> = sessions
+    // Only when some session has a worktree, so a table without any reads
+    // exactly as it always did.
+    let branches = sessions.iter().any(|s| s.branch.is_some());
+    let mut header: Vec<String> = ["ID", "AGENT", "STATUS", "FOR", "PID", "RULE"]
+        .map(String::from)
+        .to_vec();
+    if branches {
+        header.insert(2, "BRANCH".into());
+    }
+    let rows: Vec<Vec<String>> = sessions
         .iter()
         .map(|s| {
-            [
+            let mut row = vec![
                 s.id.clone(),
                 s.agent.clone(),
                 // A mark rather than a column: only finished sessions can be
@@ -89,13 +97,17 @@ pub fn session_table(sessions: &[SessionInfo]) -> String {
                 duration(Duration::from_millis(s.status_for_ms)),
                 s.pid.map_or_else(|| "-".to_string(), |p| p.to_string()),
                 s.rule.clone().unwrap_or_else(|| "-".to_string()),
-            ]
+            ];
+            if branches {
+                row.insert(2, s.branch.clone().unwrap_or_else(|| "-".to_string()));
+            }
+            row
         })
         .collect();
 
     // Column widths from the widest cell, measured in characters rather than
     // bytes so a non-ASCII agent name does not skew the alignment.
-    let mut widths = header.clone().map(|h| h.chars().count());
+    let mut widths: Vec<usize> = header.iter().map(|h| h.chars().count()).collect();
     for row in &rows {
         for (width, cell) in widths.iter_mut().zip(row) {
             *width = (*width).max(cell.chars().count());
@@ -106,8 +118,8 @@ pub fn session_table(sessions: &[SessionInfo]) -> String {
     for row in std::iter::once(&header).chain(&rows) {
         let line: Vec<String> = row
             .iter()
-            .zip(widths)
-            .map(|(cell, width)| format!("{cell:<width$}"))
+            .zip(&widths)
+            .map(|(cell, &width)| format!("{cell:<width$}"))
             .collect();
         // The last column is not padded, so lines carry no trailing spaces.
         out.push_str(line.join("  ").trim_end());
@@ -145,6 +157,9 @@ pub fn session_line(s: &SessionInfo) -> String {
     );
     if let Some(rule) = &s.rule {
         line.push_str(&format!("  (rule: {rule})"));
+    }
+    if let (Some(branch), Some(cwd)) = (&s.branch, &s.cwd) {
+        line.push_str(&format!("  on {branch} in {cwd}"));
     }
     line
 }
@@ -191,6 +206,8 @@ mod tests {
             exit_code: None,
             lost: false,
             resumable: false,
+            cwd: None,
+            branch: None,
         }
     }
 
@@ -276,6 +293,20 @@ mod tests {
 
         let plain = session_table(&[live]);
         assert!(!plain.contains('*') && !plain.contains("resume"), "{plain}");
+    }
+
+    #[test]
+    fn a_branch_column_appears_only_when_a_session_has_a_worktree() {
+        let plain = info("9b0e1172", Status::Idle, 12);
+        assert!(!session_table(std::slice::from_ref(&plain)).contains("BRANCH"));
+
+        let mut on_branch = info("3fa1c2d4", Status::Working, 3);
+        on_branch.branch = Some("feature/login".into());
+        let table = session_table(&[on_branch, plain]);
+        let lines: Vec<&str> = table.lines().collect();
+        let col = lines[0].find("BRANCH").unwrap();
+        assert_eq!(&lines[1][col..col + 13], "feature/login");
+        assert_eq!(&lines[2][col..col + 1], "-");
     }
 
     #[test]

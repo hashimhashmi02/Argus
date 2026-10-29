@@ -1,11 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the main window may do. The Argus commands themselves are allowed by default; this adds only the window calls used to draw attention to a session that needs you.",
+  "description": "What the main window may do. The Argus commands themselves are allowed by default; this adds only the window calls and the notification used to draw attention to a session that needs you.",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "core:window:allow-request-user-attention",
-    "core:window:allow-set-title"
+    "core:window:allow-set-title",
+    "core:window:allow-is-focused",
+    "notification:default"
   ]
 }

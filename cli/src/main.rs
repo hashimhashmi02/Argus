@@ -70,6 +70,12 @@ enum Command {
         /// Terminal size, as COLSxROWS.
         #[arg(long, value_name = "COLSxROWS", value_parser = parse_size)]
         size: Option<(u16, u16)>,
+
+        /// Run it in a git worktree of the repository at `--cwd` (or here),
+        /// on this branch. The branch is created if it does not exist, and a
+        /// worktree Argus already made for it is reused.
+        #[arg(long, value_name = "BRANCH")]
+        worktree: Option<String>,
     },
 
     /// Show a session's screen, exactly as the user would see it.
@@ -134,6 +140,13 @@ enum Command {
     /// Stop a session. Killing one that has already finished succeeds.
     Kill { id: String },
 
+    /// Stop every running session, then the engine.
+    ///
+    /// The sessions are recorded as finished, not lost, and those whose agent
+    /// can resume can be resumed by the next engine.
+    #[command(alias = "stop")]
+    Shutdown,
+
     /// Start a finished or lost session again, under the same id.
     ///
     /// Runs the agent's own resume command, in the folder the session ran in,
@@ -166,6 +179,13 @@ fn parse_size(s: &str) -> Result<(u16, u16), String> {
     Ok((cols, rows))
 }
 
+fn absolute(dir: &str) -> Result<String> {
+    Ok(std::path::absolute(dir)
+        .with_context(|| format!("could not resolve {dir}"))?
+        .display()
+        .to_string())
+}
+
 /// What a command does over the pipe.
 enum Action {
     /// One request, one reply.
@@ -189,11 +209,25 @@ impl Command {
         Ok(Action::Call(match self {
             Command::List => Request::List,
             Command::Agents => Request::Agents,
-            Command::Spawn { agent, cwd, size } => Request::Spawn {
+            Command::Shutdown => Request::Shutdown,
+            Command::Spawn {
                 agent,
                 cwd,
+                size,
+                worktree,
+            } => Request::Spawn {
+                agent,
+                // The engine resolves a relative folder against its own, which
+                // is not this shell's. A worktree needs the repository the user
+                // is standing in, so send where that is.
+                cwd: match (cwd, &worktree) {
+                    (Some(dir), _) => Some(absolute(&dir)?),
+                    (None, Some(_)) => Some(absolute(".")?),
+                    (None, None) => None,
+                },
                 cols: size.map(|(c, _)| c),
                 rows: size.map(|(_, r)| r),
+                worktree,
             },
             Command::Screen { id } => Request::ReadScreen { id },
             Command::Send {
@@ -301,6 +335,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         .pipe
         .as_deref()
         .map_or_else(default_pipe_name, pipe_path);
+    let shutdown = matches!(cli.command, Command::Shutdown);
     let action = cli.command.into_action()?;
 
     let result = async {
@@ -326,6 +361,9 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 println!("{}", serde_json::to_string_pretty(&reply)?);
             } else {
                 print_reply(reply);
+                if shutdown {
+                    println!("engine stopped, along with every session it was running");
+                }
             }
             Ok(ExitCode::SUCCESS)
         }

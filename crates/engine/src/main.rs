@@ -23,7 +23,6 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use argus_control_server::{Server, default_pipe_name, pipe_path};
 use argus_engine::{Engine, default_state_path};
-use tokio::sync::watch;
 
 struct Args {
     manifests: PathBuf,
@@ -119,8 +118,10 @@ async fn main() -> Result<()> {
     eprintln!("[argus-engine] listening on {}", server.name());
     eprintln!("[argus-engine] Ctrl+C to stop");
 
-    // One shutdown signal, observed by both the server and the persister.
-    let (stop_tx, stop_rx) = watch::channel(false);
+    // One shutdown signal, observed by both the server and the persister:
+    // Ctrl+C, or a client sending `shutdown`.
+    let engine = Arc::new(engine);
+    let on_ctrl_c = Arc::clone(&engine);
     tokio::spawn(async move {
         // Only an actual Ctrl+C stops the engine. If the handler cannot be
         // registered at all, `ctrl_c()` returns an error at once -- and treating
@@ -129,9 +130,7 @@ async fn main() -> Result<()> {
         // the kind of process where that could happen. No handler means no
         // Ctrl+C, not "stop now".
         match tokio::signal::ctrl_c().await {
-            Ok(()) => {
-                let _ = stop_tx.send(true);
-            }
+            Ok(()) => on_ctrl_c.request_stop(),
             Err(error) => {
                 eprintln!(
                     "[argus-engine] Ctrl+C handling unavailable ({error}); running until killed"
@@ -140,14 +139,9 @@ async fn main() -> Result<()> {
             }
         }
     });
-    let stopped = |mut rx: watch::Receiver<bool>| async move {
-        let _ = rx.wait_for(|stop| *stop).await;
-    };
+    let persister = tokio::spawn(Arc::clone(&engine).run_persister(engine.stopped()));
 
-    let engine = Arc::new(engine);
-    let persister = tokio::spawn(Arc::clone(&engine).run_persister(stopped(stop_rx.clone())));
-
-    server.run(Arc::clone(&engine), stopped(stop_rx)).await?;
+    server.run(Arc::clone(&engine), engine.stopped()).await?;
 
     // The persister does a final save on the way out. Waiting for it means a
     // Ctrl+C never loses the last second of changes.

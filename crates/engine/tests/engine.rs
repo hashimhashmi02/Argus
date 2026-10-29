@@ -75,6 +75,7 @@ async fn spawn_shell(client: &mut Client) -> SessionInfo {
             cwd: None,
             cols: None,
             rows: None,
+            worktree: None,
         })
         .await
         .unwrap()
@@ -260,6 +261,7 @@ async fn errors_are_specific_enough_to_act_on() {
         cwd: None,
         cols: None,
         rows: None,
+        worktree: None,
     };
     assert_eq!(
         expect_error(&mut client, unknown_agent).await,
@@ -279,6 +281,7 @@ async fn errors_are_specific_enough_to_act_on() {
         cwd: Some(r"C:\definitely\not\a\real\directory".into()),
         cols: None,
         rows: None,
+        worktree: None,
     };
     assert_eq!(
         expect_error(&mut client, bad_cwd).await,

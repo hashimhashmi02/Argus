@@ -1,0 +1,4 @@
+dist/
+dist.new/
+*.tgz
+node_modules/

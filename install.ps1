@@ -8,12 +8,12 @@
 # turned into a script block first, because a pipe into `iex` cannot carry
 # arguments:
 #
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/hashimhashmi02/Argus/main/install.ps1))) -Version 0.1.0
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/hashimhashmi02/Argus/main/install.ps1))) -Version 0.2.0
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/hashimhashmi02/Argus/main/install.ps1))) -Uninstall
 #
 # From a clone, or a zip built by scripts\package.ps1:
 #
-#   .\install.ps1 -FromZip dist\argus-0.1.0-x86_64-pc-windows-msvc.zip
+#   .\install.ps1 -FromZip dist\argus-0.2.0-x86_64-pc-windows-msvc.zip
 #
 # What it does, and nothing more: downloads the release zip and checks it
 # against the release's SHA256SUMS, unpacks it into

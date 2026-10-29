@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
 import { api, isUiError, type SessionInfo } from "./api";
 import { usePolling } from "./usePolling";
 import { blocked, layout, layoutKey, morph, reduceView, type Action, type View } from "./layout";
@@ -87,6 +92,29 @@ export default function App() {
     lastNeedYou.current = needYou;
   }, [needYou]);
 
+  // And a toast for each session that newly needs you, unless this window is
+  // already in front -- then the pane turning yellow is enough.
+  const notified = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const now = new Set(list.filter(blocked).map((s) => s.id));
+    const fresh = list.filter((s) => now.has(s.id) && !notified.current.has(s.id));
+    notified.current = now;
+    if (fresh.length === 0) return;
+    (async () => {
+      if (await getCurrentWindow().isFocused()) return;
+      let allowed = await isPermissionGranted();
+      if (!allowed) allowed = (await requestPermission()) === "granted";
+      if (!allowed) return;
+      for (const s of fresh) {
+        const where = s.branch ? ` on ${s.branch}` : "";
+        sendNotification({
+          title: `${list.indexOf(s)}:${s.agent}${where} needs you`,
+          body: s.rule ? `Waiting on a prompt (${s.rule}).` : "Waiting on a prompt.",
+        });
+      }
+    })().catch(() => {});
+  }, [list]);
+
   // `y` and `n` answer the current pane, but only once its prompt has been on
   // screen for a moment: a key pressed as a bell moves you must not answer a
   // question you never saw.
@@ -156,6 +184,17 @@ export default function App() {
     [say, fail, sessions],
   );
 
+  const confirm = (p: Prompt) => {
+    if (p.kind === "kill") api.kill(p.id).catch(fail);
+    if (p.kind === "stop") {
+      say("stopping the engine");
+      api
+        .stopEngine()
+        .then(() => sessions.refresh())
+        .catch(fail);
+    }
+  };
+
   const toggleZoom = useCallback(
     (id: string) => apply(viewRef.current.zoomed ? { type: "unzoom" } : { type: "zoom", id }),
     [apply],
@@ -201,6 +240,9 @@ export default function App() {
           break;
         case "start":
           startEngine();
+          break;
+        case "stop":
+          if (!notRunning) setPrompt({ kind: "stop" });
           break;
       }
     },
@@ -260,10 +302,10 @@ export default function App() {
       if (e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
       if (target.closest("input, textarea, select")) return;
 
-      if (prompt?.kind === "kill") {
+      if (prompt?.kind === "kill" || prompt?.kind === "stop") {
         if (e.key === "y") {
           setPrompt(undefined);
-          api.kill(prompt.id).catch(fail);
+          confirm(prompt);
         } else if (e.key === "n" || e.key === "Escape") {
           setPrompt(undefined);
         } else return;
@@ -305,6 +347,8 @@ export default function App() {
         run("type");
       } else if (e.key === "s" && notRunning) {
         run("start");
+      } else if (e.key === "Q") {
+        run("stop");
       } else {
         return;
       }
@@ -384,17 +428,23 @@ export default function App() {
         onCommand={run}
         onCancel={() => setPrompt(undefined)}
         onConfirm={() => {
-          if (prompt?.kind === "kill") api.kill(prompt.id).catch(fail);
+          if (prompt) confirm(prompt);
           setPrompt(undefined);
         }}
         onSend={(id, text) => {
           setPrompt(undefined);
           api.sendLine(id, text).catch(fail);
         }}
-        onSpawn={async (agent, cwd) => {
+        onSpawn={async (agent, cwd, branch) => {
           setPrompt(undefined);
+          if (branch.trim()) say(`making a worktree for ${branch.trim()}`);
           try {
-            const session = await api.spawn(agent, cwd.trim() || undefined);
+            const session = await api.spawn(
+              agent,
+              cwd.trim() || undefined,
+              branch.trim() || undefined,
+            );
+            setMessage(undefined);
             apply({ type: "select", id: session.id });
             sessions.refresh();
           } catch (err) {
@@ -462,6 +512,7 @@ function NoSessions({ loading, onNew }: { loading: boolean; onNew: () => void })
     [":", "send-keys", "type one line into the current pane"],
     ["x", "kill-pane", "stop the current session, after asking"],
     ["r", "respawn-pane", "start a finished or lost session again, where it left off"],
+    ["Q", "kill-server", "stop the engine and every session, after asking"],
   ];
   return (
     <div className="notice">

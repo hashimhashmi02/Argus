@@ -78,6 +78,14 @@ export function Pane(props: Props) {
         <span className="seg">{s.id}</span>
         <span className="tick" />
         <span className="seg seg-status">{paneStatus(s)}</span>
+        {s.branch && (
+          <>
+            <span className="tick" />
+            <span className="seg seg-branch" title={s.cwd}>
+              {s.branch}
+            </span>
+          </>
+        )}
         <span className="tick" />
         <span className="seg">{s.rule ?? "-"}</span>
         <span className="fill" />

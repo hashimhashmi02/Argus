@@ -2,18 +2,23 @@
 
 A native Windows orchestrator for coding agents.
 
-Run several agents — Claude Code, Codex, Cursor, Gemini CLI, or a plain shell —
-in parallel, each in its own git worktree and its own real terminal session, and
-see at a glance which one is **working**, which **needs you**, which is **idle**,
-and which is **done**.
+Run several coding agents in parallel, each in its own real terminal session and,
+if you like, its own git worktree, and see at a glance which one is **working**,
+which **needs you**, which is **idle**, and which is **done**.
+
+Claude Code and PowerShell work out of the box. Any other terminal agent is one
+JSON manifest away: how to launch it, how to tell its screens apart, and which
+keys answer its prompts. See [manifests/](manifests/README.md).
 
 Windows-native, written in Rust, built on [ConPTY](https://devblogs.microsoft.com/commandline/windows-command-line-introducing-the-windows-pseudo-console-conpty/).
 
-> **Status: early.** Step 10: installable in one line. The engine runs as a
-> daemon, a desktop app and `argus-cli` both drive it, and the session list
-> survives an engine restart. A session lost in a crash can be resumed, back
-> into the same conversation. The app tiles every agent's screen, and a zoomed
-> pane is the agent's real terminal, live and typeable.
+> **Status: 0.2.** The engine runs as a daemon, and both the desktop app and
+> `argus-cli` drive it. Each agent can get a git worktree on a branch of its
+> own. The session list survives an engine restart, and a session lost in a
+> crash can be resumed back into the same conversation. The app tiles every
+> agent's screen, puts the one that needs you up front, and sends a Windows
+> notification when you're looking elsewhere. A zoomed pane is the agent's real
+> terminal, live and typeable.
 > See [DESIGN.md](DESIGN.md) for the architecture and the build order.
 
 ## Why
@@ -27,7 +32,24 @@ the Argus window never kills a running agent.
 
 ## Install
 
-One line in PowerShell:
+With npm, on Windows 10 or 11:
+
+```powershell
+npm install -g argus-agents
+```
+
+```powershell
+argus
+```
+
+`argus` opens the desktop app, and `argus-cli` and `argus-engine` land on your
+PATH too. The package holds no binaries of its own: installing it downloads
+the matching release zip from GitHub and checks it against that release's
+`SHA256SUMS` before unpacking. If npm skips install scripts, that happens the
+first time you run one of them instead. `npm uninstall -g argus-agents` removes
+it.
+
+Or without Node, one line in PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/hashimhashmi02/Argus/main/install.ps1 | iex
@@ -43,7 +65,7 @@ A specific version, or to uninstall (your session history in
 `%LOCALAPPDATA%\Argus` stays unless you add `-Purge`):
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/hashimhashmi02/Argus/main/install.ps1))) -Version 0.1.0
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/hashimhashmi02/Argus/main/install.ps1))) -Version 0.2.0
 ```
 
 ```powershell
@@ -69,7 +91,7 @@ To build the same zip a release ships, and install from it:
 ```
 
 ```powershell
-.\install.ps1 -FromZip dist\argus-0.1.0-x86_64-pc-windows-msvc.zip
+.\install.ps1 -FromZip dist\argus-0.2.0-x86_64-pc-windows-msvc.zip
 ```
 
 A release is that zip and its `SHA256SUMS`, published under a version tag that
@@ -77,7 +99,24 @@ matches the version in `Cargo.toml` — which is what the one-line installer
 downloads:
 
 ```powershell
-gh release create v0.1.0 dist\argus-0.1.0-x86_64-pc-windows-msvc.zip dist\SHA256SUMS --title "Argus v0.1.0" --generate-notes
+gh release create v0.2.0 dist\argus-0.2.0-x86_64-pc-windows-msvc.zip dist\SHA256SUMS --title "Argus v0.2.0" --generate-notes
+```
+
+Then the npm package, whose version must match. It downloads that release
+when installed, so publish it after the release exists:
+
+```powershell
+cd npm
+```
+
+```powershell
+npm publish
+```
+
+To try the npm package against a local build first, point it at the zip:
+
+```powershell
+$env:ARGUS_ZIP = "$PWD\dist\argus-0.2.0-x86_64-pc-windows-msvc.zip"; npm install -g .\npm
 ```
 
 ### The desktop app
@@ -106,6 +145,16 @@ and the status line along the bottom flags each one: `!` needs you, `#` working,
 | `c` | Start a new session |
 | `x` | Kill the pane's session, after asking |
 | `r` | Resume the pane's finished or lost session |
+| `Q` | Stop the engine and every session, after asking |
+
+`c` asks for an agent, an optional working folder (`-c`), and an optional
+worktree branch (`-b`). With a branch, the agent runs in a git worktree of that
+folder's repository instead of the folder itself. A pane on a worktree shows
+its branch in magenta.
+
+When a session starts needing you and the Argus window isn't in front, Windows
+shows a notification, the taskbar button flashes, and the window title counts
+how many are waiting.
 
 A zoomed pane is the agent's real terminal, in full colour. Press `i` or click
 it, and everything you type goes to the agent, Esc and Ctrl+C included. To get
@@ -172,6 +221,30 @@ ids accepted by any unique prefix:
 | `watch <id>` | Mirror its terminal here, live and in colour, read-only, until it ends or Ctrl+C |
 | `kill <id>` | Stop it |
 | `resume <id>` | Start a finished or lost session again, same id, same folder, same conversation |
+| `shutdown` | Stop every session, then the engine. They are recorded as finished, not lost |
+
+### Worktrees
+
+Two agents editing one checkout trip over each other's changes. Give each one a
+branch and Argus runs it in a [git worktree](https://git-scm.com/docs/git-worktree)
+of its own:
+
+```bash
+cargo run -p argus-cli -- spawn claude-code --cwd C:\src\shop-api --worktree feature/login
+```
+
+```bash
+cargo run -p argus-cli -- spawn claude-code --cwd C:\src\shop-api --worktree fix/cart-total
+```
+
+The branch is created from the repository's `HEAD` if it doesn't exist yet.
+Worktrees go in `%LOCALAPPDATA%\Argus\worktrees\<repo>\<branch>`, outside
+your repository, so they never show up there as untracked files. A second session
+on the same branch shares its worktree, and the branch your main checkout is on
+runs in the main checkout. Killing a session leaves its worktree and everything
+the agent wrote. Merge the branch as usual, then remove the worktree with
+`git worktree remove`. `list` gains a `BRANCH` column as soon as any session has
+one.
 
 Add `--json` to any command for the engine's raw reply. Exit codes are 0 for
 success, 1 if the engine refused, 2 for bad usage, and 3 if no engine is
