@@ -666,6 +666,53 @@ user's home: launched from the Start menu, the app's own working directory is
 wherever Explorer chose, and a session spawned without a folder is recorded as
 running in the engine's.
 
+The same zip is also published to npm, as `argus-agents`, for people who
+already have Node. The package holds no binaries: its `postinstall` downloads the
+release named after its own version, checks it against `SHA256SUMS` exactly as
+`install.ps1` does, and unpacks it with Windows' own `Expand-Archive`, so the
+package has no dependencies to audit. `argus`, `argus-cli` and `argus-engine`
+are small Node launchers that run the unpacked programs. Because the version is
+the link between the two, `package.ps1` refuses to build when `npm\package.json`
+disagrees with `Cargo.toml`.
+
+### Worktrees
+
+Two agents in one checkout edit the same files and trip over each other's
+changes. `spawn` takes an optional branch, and the engine runs that agent in a
+git worktree on the branch instead of in the folder it was given:
+
+- **One worktree per branch.** If any worktree already has the branch checked
+  out, that is where the session runs. That covers one Argus made for an
+  earlier session, and the main checkout itself. Git would refuse a second
+  checkout of the branch anyway, and the person asked to work on that branch.
+  A branch that doesn't exist is created from `HEAD`.
+- **Outside the repository.** New worktrees go under `worktrees\<repo>\<branch>`
+  beside the state file. Inside the repository they would show up as untracked
+  folders in the main checkout. The path is recorded in Windows form
+  (`C:\src`, not git's `C:/src`), so the same folder is always the same string.
+- **Kept after the session.** Killing an agent does not delete what it wrote.
+  Removing a worktree is `git worktree remove`, after the branch is merged or
+  abandoned. That's a decision about the work, which Argus doesn't make.
+- **Recorded with the session.** The branch is persisted beside the folder, so
+  the list still shows it after a restart, and a resume lands back in the
+  worktree because that's the session's folder.
+
+Git runs under hardening rule 1, mostly: no stdin, `GIT_TERMINAL_PROMPT=0`, no
+credential dialog, no console window, and a 60-second deadline. The user's git
+config is kept, though. A worktree checked out without their `core.autocrlf`
+would not match the line endings of their main checkout.
+
+### Stopping the engine
+
+`shutdown` kills every live session, answers, and then stops the engine. The
+sessions are killed first, not left to die with the engine, so they are
+remembered as finished with an exit code rather than as `lost`. `lost` means
+the engine went away unexpectedly, and a deliberate stop is not that. They stay
+resumable where their agent allows it. The stop signal is sent a moment after
+the reply, so the reply reaches the client before the process starts to exit.
+The CLI sends it as `argus-cli shutdown`; the window asks first, on `Q` or a
+click on "engine up".
+
 ## Hardening rules
 
 These are not hypothetical. They come from the bug history of Zeus and from the
@@ -714,6 +761,7 @@ Each step is a working, runnable checkpoint — not a half-finished layer.
 | 8b | `app/`: interactive terminal (xterm.js) over a streaming `watch` RPC | **done** |
 | 9 | `resume`: a lost or finished session started again, same id, same conversation | **done** |
 | 10 | Packaging: a release zip, and a one-line `install.ps1` that installs it | **done** |
+| 11 | Worktrees per session, `shutdown`, notifications, and `npm install -g argus-agents` | **done** |
 
 The UI is last on purpose. A UI built on an unstable protocol locks in the
 mistakes of that protocol.

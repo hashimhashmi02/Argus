@@ -42,13 +42,15 @@ Per session: an 8-character id (any unique prefix is accepted elsewhere, e.g. th
 
 Statuses: **working**, **needs you**, **idle**, **done**, plus **lost** — a session that was still running when a previous engine stopped and died with it. Lost is not done and must never read as finished.
 
-Actions: spawn (agent + optional working directory), type into a zoomed pane's live terminal, send a line (Enter sent as its own keystroke), send a named key (Enter, Esc, Ctrl+C, arrows), approve / deny (the engine sends that agent's own keys from its manifest), kill, resume a finished or lost session (same id, same folder, same conversation; the engine says which sessions can be), and start the engine when it is not running.
+Actions: spawn (agent + optional working directory + optional worktree branch), type into a zoomed pane's live terminal, send a line (Enter sent as its own keystroke), send a named key (Enter, Esc, Ctrl+C, arrows), approve / deny (the engine sends that agent's own keys from its manifest), kill, resume a finished or lost session (same id, same folder, same conversation; the engine says which sessions can be), start the engine when it is not running, and stop it (every session first, after asking).
 
 The tiled screens are the emulated terminal as plain text, polled; a zoomed live pane is the real terminal, streamed in full colour.
 
-Installed per user by a one-line PowerShell installer (Start menu shortcut, no admin), from a release zip.
+Installed per user by a one-line PowerShell installer (Start menu shortcut, no admin), or with `npm install -g argus-agents`, both from the same release zip.
 
-Not yet built: stopping the engine from the UI, code signing, notifications beyond a taskbar flash and a count in the window title.
+Attention: a Windows notification when a session newly needs you and the window is not in front, a taskbar flash, and a count in the window title.
+
+Not yet built: code signing.
 
 Terminology: session, agent, engine, manifest, rule, needs you, lost, resumable.
 
