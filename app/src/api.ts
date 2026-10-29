@@ -22,6 +22,10 @@ export interface SessionInfo {
   lost?: boolean;
   /** Finished, and `resume` would start it again under the same id. */
   resumable?: boolean;
+  /** The folder the agent runs in. */
+  cwd?: string;
+  /** The branch of the git worktree Argus made for it, if any. */
+  branch?: string;
 }
 
 export interface ScreenView {
@@ -64,7 +68,8 @@ export const api = {
   listSessions: () => invoke<SessionInfo[]>("list_sessions"),
   listAgents: () => invoke<AgentInfo[]>("list_agents"),
   readScreen: (id: string) => invoke<ScreenView>("read_screen", { id }),
-  spawn: (agent: string, cwd?: string) => invoke<SessionInfo>("spawn_session", { agent, cwd }),
+  spawn: (agent: string, cwd?: string, worktree?: string) =>
+    invoke<SessionInfo>("spawn_session", { agent, cwd, worktree }),
   sendLine: (id: string, text: string) => invoke<void>("send_line", { id, text }),
   sendText: (id: string, text: string) => invoke<void>("send_text", { id, text }),
   sendKey: (id: string, key: string) => invoke<void>("send_key", { id, key }),
@@ -81,4 +86,5 @@ export const api = {
   kill: (id: string) => invoke<void>("kill_session", { id }),
   resume: (id: string) => invoke<SessionInfo>("resume_session", { id }),
   startEngine: () => invoke<void>("start_engine"),
+  stopEngine: () => invoke<void>("stop_engine"),
 };

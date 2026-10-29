@@ -30,3 +30,6 @@ tauri = { version = "2", features = [] }
 # Only for bounding every engine call with a timeout. Tauri already runs on
 # tokio; this just makes the timer available.
 tokio = { workspace = true, features = ["time"] }
+# A Windows toast when a session starts needing you and the window is not in
+# front, so it is seen from another app, not only from the taskbar.
+tauri-plugin-notification = "2"

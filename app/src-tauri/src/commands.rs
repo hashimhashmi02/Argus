@@ -110,6 +110,10 @@ async fn call(pipe: &Pipe, request: Request) -> Result<Reply> {
     bounded(async { Ok(connect(pipe).await?.call(request).await?) }).await
 }
 
+/// Long enough for the engine's own git deadline when it checks out a
+/// worktree, so its error reaches the user instead of this one.
+const WORKTREE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(75);
+
 /// A reply of the wrong kind means the engine and UI disagree about the
 /// protocol in a way the version check did not catch. Say so plainly.
 fn unexpected(reply: Reply) -> UiError {
@@ -149,16 +153,36 @@ pub async fn spawn_session(
     pipe: State<'_, Pipe>,
     agent: String,
     cwd: Option<String>,
+    worktree: Option<String>,
 ) -> Result<SessionInfo> {
-    // An empty working-directory box means "the default", not "the empty path".
+    // An empty box means "the default", not "the empty path" or "branch ``".
     let cwd = cwd.filter(|dir| !dir.trim().is_empty());
+    let worktree = worktree
+        .map(|branch| branch.trim().to_string())
+        .filter(|branch| !branch.is_empty());
+    let slow = worktree.is_some();
     let request = Request::Spawn {
         agent,
         cwd,
         cols: None,
         rows: None,
+        worktree,
     };
-    match call(&pipe, request).await? {
+    let work = async { Ok(connect(&pipe).await?.call(request).await?) };
+    let reply = if slow {
+        tokio::time::timeout(WORKTREE_TIMEOUT, work)
+            .await
+            .unwrap_or_else(|_| {
+                Err(UiError {
+                    kind: "other",
+                    code: None,
+                    message: format!("the engine did not answer within {WORKTREE_TIMEOUT:?}"),
+                })
+            })?
+    } else {
+        bounded(work).await?
+    };
+    match reply {
         Reply::Session { session } => Ok(session),
         other => Err(unexpected(other)),
     }
@@ -291,6 +315,13 @@ pub async fn resume_session(pipe: State<'_, Pipe>, id: String) -> Result<Session
         Reply::Session { session } => Ok(session),
         other => Err(unexpected(other)),
     }
+}
+
+/// Stop every session, then the engine.
+#[tauri::command]
+pub async fn stop_engine(pipe: State<'_, Pipe>) -> Result<()> {
+    call(&pipe, Request::Shutdown).await?;
+    Ok(())
 }
 
 /// Start the engine as a detached background process.

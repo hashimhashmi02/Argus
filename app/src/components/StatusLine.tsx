@@ -7,6 +7,7 @@ import { keepFocus } from "../layout";
 export type Prompt =
   | { kind: "send"; id: string }
   | { kind: "kill"; id: string }
+  | { kind: "stop" }
   | { kind: "new" };
 
 export interface Message {
@@ -25,6 +26,7 @@ export type Command =
   | "kill"
   | "resume"
   | "start"
+  | "stop"
   | "type"
   | "detach";
 
@@ -45,7 +47,7 @@ interface Props {
   onCancel: () => void;
   onConfirm: () => void;
   onSend: (id: string, text: string) => void;
-  onSpawn: (agent: string, cwd: string) => void;
+  onSpawn: (agent: string, cwd: string, branch: string) => void;
   onDismiss: () => void;
 }
 
@@ -71,6 +73,24 @@ export function StatusLine(props: Props) {
         <span className="status-text">
           kill-pane {name(prompt.id)} {prompt.id}? (y/n)
         </span>
+        <button type="button" className="answer" onClick={props.onConfirm}>
+          y
+        </button>
+        <button type="button" className="answer" onClick={props.onCancel}>
+          n
+        </button>
+      </footer>
+    );
+  }
+  if (prompt?.kind === "stop") {
+    const running = list.filter((s) => s.status !== "done").length;
+    const what =
+      running === 0
+        ? "no sessions are running"
+        : `stops ${running} running session${running === 1 ? "" : "s"}`;
+    return (
+      <footer className="status is-prompt" role="alertdialog" aria-label="Confirm stop engine">
+        <span className="status-text">kill-server? {what} (y/n)</span>
         <button type="button" className="answer" onClick={props.onConfirm}>
           y
         </button>
@@ -116,7 +136,7 @@ export function StatusLine(props: Props) {
         ))}
       </nav>
       <Hints {...props} />
-      <EngineState engine={props.engine} />
+      <EngineState engine={props.engine} onStop={() => props.onCommand("stop")} />
       <Clock />
     </footer>
   );
@@ -160,8 +180,20 @@ function Hints({ engine, list, zoomed, current, typing, prefix, onCommand }: Pro
   );
 }
 
-function EngineState({ engine }: { engine: Engine }) {
-  if (engine.state === "up") return <span className="engine">engine up</span>;
+function EngineState({ engine, onStop }: { engine: Engine; onStop: () => void }) {
+  if (engine.state === "up") {
+    return (
+      <button
+        type="button"
+        className="engine"
+        title="Q: stop the engine and every session"
+        onMouseDown={keepFocus}
+        onClick={onStop}
+      >
+        engine up
+      </button>
+    );
+  }
   if (engine.state === "down") return <span className="engine is-down">no server</span>;
   // Not "down": the engine answered, or half-answered, and every poll retries.
   return (
@@ -221,14 +253,33 @@ function NewPrompt(props: Props) {
   const { agents } = props;
   const [at, setAt] = useState(0);
   const [cwd, setCwd] = useState("");
+  const [branch, setBranch] = useState("");
   const chosen = agents[at];
+  const start = () => {
+    if (chosen) props.onSpawn(chosen.id, cwd, branch);
+  };
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    // By hand: a form with two text fields and no submit button is not
+    // submitted by Enter.
+    if (e.key === "Enter") {
+      e.preventDefault();
+      start();
+    }
+    if (e.key === "Escape") props.onCancel();
+    // Up and Down pick the agent, so the whole prompt works from the keyboard.
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && agents.length > 0) {
+      e.preventDefault();
+      const by = e.key === "ArrowDown" ? 1 : -1;
+      setAt((i) => (i + by + agents.length) % agents.length);
+    }
+  };
 
   return (
     <form
       className="status is-prompt"
       onSubmit={(e) => {
         e.preventDefault();
-        if (chosen) props.onSpawn(chosen.id, cwd);
+        start();
       }}
     >
       <span className="status-text">new-window</span>
@@ -257,20 +308,25 @@ function NewPrompt(props: Props) {
         value={cwd}
         placeholder="working directory (optional)"
         onChange={(e) => setCwd(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") props.onCancel();
-          // Up and Down pick the agent, so the whole prompt works from the keyboard.
-          if ((e.key === "ArrowUp" || e.key === "ArrowDown") && agents.length > 0) {
-            e.preventDefault();
-            const by = e.key === "ArrowDown" ? 1 : -1;
-            setAt((i) => (i + by + agents.length) % agents.length);
-          }
-        }}
+        onKeyDown={onKeyDown}
         autoFocus
         spellCheck={false}
         autoComplete="off"
       />
-      <span className="prompt-hint">up/down agent · enter start · esc cancel</span>
+      <label className="status-text" htmlFor="new-branch">
+        -b
+      </label>
+      <input
+        id="new-branch"
+        className="prompt-input"
+        value={branch}
+        placeholder="worktree branch (optional)"
+        onChange={(e) => setBranch(e.target.value)}
+        onKeyDown={onKeyDown}
+        spellCheck={false}
+        autoComplete="off"
+      />
+      <span className="prompt-hint">up/down agent · tab next · enter start · esc cancel</span>
     </form>
   );
 }

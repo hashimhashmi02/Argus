@@ -91,11 +91,13 @@
   --red: #c50f1f;
   --green: #13a10e;
   --yellow: #c19c00;
+  --magenta: #881798;
   --cyan: #3a96dd;
   --white: #cccccc;
   --bright-black: #767676;
   --bright-red: #e74856;
   --bright-yellow: #f9f1a5;
+  --bright-magenta: #b4009e;
   --bright-white: #f2f2f2;
 
   --mono: "Argus Mono", "Cascadia Mono", Consolas, monospace;
@@ -275,6 +277,11 @@ button {
 
 .seg-name {
   color: var(--bright-white);
+}
+
+/* A worktree's branch, in the colour git prints branch names in. */
+.seg-branch {
+  color: var(--bright-magenta);
 }
 
 .is-working .seg-status {
@@ -458,7 +465,8 @@ button {
 }
 
 .window:hover,
-.hint:hover {
+.hint:hover,
+button.engine:hover {
   text-decoration: underline;
   text-underline-offset: 0.2em;
 }

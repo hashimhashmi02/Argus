@@ -29,6 +29,7 @@ fn main() {
     let launcher = engine::EngineLauncher::locate().expect("could not find this executable's path");
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .manage(commands::Pipe(pipe))
         .manage(commands::Watches::default())
         .manage(launcher)
@@ -47,6 +48,7 @@ fn main() {
             commands::watch_session,
             commands::unwatch_session,
             commands::start_engine,
+            commands::stop_engine,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Argus UI");
