@@ -41,8 +41,11 @@ if (-not $version) { throw "could not read the workspace version from Cargo.toml
 # reports a different version than its binaries is worse than no release.
 $appVersion = (Get-Content app\src-tauri\tauri.conf.json -Raw | ConvertFrom-Json).version
 $npmVersion = (Get-Content app\package.json -Raw | ConvertFrom-Json).version
-if ($appVersion -ne $version -or $npmVersion -ne $version) {
-    throw "versions disagree: Cargo.toml $version, tauri.conf.json $appVersion, package.json $npmVersion"
+# The npm package downloads the release named after its own version, so it
+# has to agree too.
+$pkgVersion = (Get-Content npm\package.json -Raw | ConvertFrom-Json).version
+if ($appVersion -ne $version -or $npmVersion -ne $version -or $pkgVersion -ne $version) {
+    throw "versions disagree: Cargo.toml $version, tauri.conf.json $appVersion, app\package.json $npmVersion, npm\package.json $pkgVersion"
 }
 $target = "x86_64-pc-windows-msvc"
 $name = "argus-$version-$target"

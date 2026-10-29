@@ -20,7 +20,7 @@ members = [
 # Metadata every member inherits via `field.workspace = true`, so bumping the
 # version or the repo URL is a one-line change instead of a ten-file sweep.
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
