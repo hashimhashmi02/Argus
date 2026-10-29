@@ -38,6 +38,9 @@ pub struct Entry<H> {
     /// The id of the agent's own conversation, for agents that resume by one.
     pub agent_session: Option<String>,
 
+    /// The branch of the git worktree made for this session, if one was.
+    pub branch: Option<String>,
+
     /// Wall-clock creation time, Unix milliseconds.
     pub created_unix_ms: u64,
 
@@ -140,6 +143,7 @@ impl<H: Clone> Registry<H> {
         agent: &str,
         cwd: Option<PathBuf>,
         agent_session: Option<String>,
+        branch: Option<String>,
         handle: H,
     ) -> String {
         let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
@@ -165,6 +169,7 @@ impl<H: Clone> Registry<H> {
                 agent: agent.to_string(),
                 cwd,
                 agent_session,
+                branch,
                 created_unix_ms: now,
                 started_unix_ms: now,
                 handle: Some(handle),
@@ -201,6 +206,7 @@ impl<H: Clone> Registry<H> {
                     agent: record.agent.clone(),
                     cwd: record.cwd.clone(),
                     agent_session: record.agent_session.clone(),
+                    branch: record.branch.clone(),
                     created_unix_ms: record.created_unix_ms,
                     started_unix_ms: record.created_unix_ms,
                     handle: None,
@@ -384,6 +390,7 @@ mod lookup_tests {
                     agent: "test".into(),
                     cwd: None,
                     agent_session: None,
+                    branch: None,
                     created_unix_ms: seq as u64,
                     started_unix_ms: seq as u64,
                     handle: Some(seq as u32),
@@ -446,7 +453,7 @@ mod lookup_tests {
     fn list_is_in_creation_order_not_hash_order() {
         let registry: Registry<u32> = Registry::new();
         let ids: Vec<String> = (0..20)
-            .map(|i| registry.insert("a", None, None, i))
+            .map(|i| registry.insert("a", None, None, None, i))
             .collect();
 
         let listed: Vec<String> = registry.list().into_iter().map(|e| e.id).collect();
@@ -471,6 +478,7 @@ mod resume_tests {
             agent: "claude-code".into(),
             cwd: Some(PathBuf::from(r"C:\work")),
             agent_session: Some("7c1d0a52-3c11-4b5e-9a0e-5f1b2d3c4e5f".into()),
+            branch: None,
             created_unix_ms: 1_000,
             status: Status::Done,
             status_since_unix_ms: 2_000,
@@ -528,8 +536,8 @@ mod resume_tests {
     #[test]
     fn a_live_session_is_not_resumed_but_a_finished_one_is() {
         let registry: Registry<u32> = Registry::new();
-        let live = registry.insert("shell", None, None, 1);
-        let finished = registry.insert("shell", None, None, 2);
+        let live = registry.insert("shell", None, None, None, 1);
+        let finished = registry.insert("shell", None, None, None, 2);
 
         assert_eq!(
             registry.begin_resume(&live, is_live).map(|e| e.id),

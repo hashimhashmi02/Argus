@@ -26,9 +26,10 @@ use argus_reducer::{Status, Timestamp};
 use argus_registry::{Entry, LookupError, Registry, ResumeError, now_unix_ms};
 use argus_session::{Repaint, Session, SessionConfig, SessionHandle, StreamItem, Watch};
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Notify, mpsc, watch};
 
 mod persistence;
+mod worktree;
 
 use persistence::Persistence;
 pub use persistence::{StartupReport, default_state_path};
@@ -59,6 +60,10 @@ pub struct Engine {
     /// Poked whenever the registry changes shape, so a new session reaches the
     /// disk immediately rather than at the next tick.
     dirty: Notify,
+    /// Where worktrees made for sessions go, one folder per repository.
+    worktree_root: PathBuf,
+    /// Set once something has asked the engine to stop.
+    stop: watch::Sender<bool>,
 }
 
 impl Engine {
@@ -79,7 +84,30 @@ impl Engine {
             registry: Registry::new(),
             persistence: None,
             dirty: Notify::new(),
+            worktree_root: std::env::temp_dir().join("argus-worktrees"),
+            stop: watch::Sender::new(false),
         })
+    }
+
+    /// Ask the engine to stop. [`stopped`](Self::stopped) completes for every
+    /// waiter.
+    pub fn request_stop(&self) {
+        self.stop.send_replace(true);
+    }
+
+    /// Completes once [`request_stop`](Self::request_stop) has been called, or
+    /// a client has sent `shutdown`.
+    pub fn stopped(&self) -> impl Future<Output = ()> + Send + 'static {
+        let mut stop = self.stop.subscribe();
+        async move {
+            let _ = stop.wait_for(|stop| *stop).await;
+        }
+    }
+
+    /// Make worktrees for sessions under `root` instead.
+    pub fn with_worktree_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.worktree_root = root.into();
+        self
     }
 
     /// Remember sessions in `path`, restoring whatever it holds from a previous
@@ -102,6 +130,12 @@ impl Engine {
             .save_if_changed(&self.registry.list())
             .with_context(|| format!("could not write the state file {}", path.display()))?;
 
+        // Beside the state file: per user, outside every repository, so a
+        // worktree never shows up as an untracked folder in the one it came
+        // from.
+        if let Some(dir) = path.parent() {
+            self.worktree_root = dir.join("worktrees");
+        }
         self.persistence = Some(persistence);
         Ok((self, report))
     }
@@ -202,7 +236,8 @@ impl Engine {
                 cwd,
                 cols,
                 rows,
-            } => self.spawn(&agent, cwd, cols, rows),
+                worktree,
+            } => self.spawn(&agent, cwd, cols, rows, worktree).await,
 
             Request::SendText { id, text } => {
                 let entry = self.find(&id)?;
@@ -303,6 +338,23 @@ impl Engine {
                 "`watch` is answered as a stream, on a connection of its own",
             )),
 
+            Request::Shutdown => {
+                for entry in self.registry.list() {
+                    if let Some(handle) = &entry.handle {
+                        let _ = handle.kill().await;
+                    }
+                }
+                // Long enough for the session tasks to record their exits and
+                // for this reply to reach the client before the server stops
+                // accepting and the process starts to exit.
+                let stop = self.stop.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    stop.send_replace(true);
+                });
+                Ok(Reply::Done)
+            }
+
             Request::Kill { id } => {
                 let entry = self.find(&id)?;
                 // Idempotent: killing something already dead -- or restored
@@ -318,12 +370,13 @@ impl Engine {
         }
     }
 
-    fn spawn(
+    async fn spawn(
         &self,
         agent_id: &str,
         cwd: Option<String>,
         cols: Option<u16>,
         rows: Option<u16>,
+        branch: Option<String>,
     ) -> Result<Reply, RpcError> {
         let agent = self.agents.get(agent_id).ok_or_else(|| {
             let known: Vec<&str> = self.agent_ids().collect();
@@ -348,6 +401,21 @@ impl Engine {
             )
         })?;
 
+        let cwd = match &branch {
+            Some(branch) => {
+                if !cwd.is_dir() {
+                    return Err(RpcError::new(
+                        ErrorCode::BadRequest,
+                        format!("working directory {} does not exist", cwd.display()),
+                    ));
+                }
+                worktree::prepare(&cwd, branch, &self.worktree_root)
+                    .await
+                    .map_err(|e| RpcError::new(ErrorCode::BadRequest, e))?
+            }
+            None => cwd,
+        };
+
         let config = sized(SessionConfig::default(), cols, rows);
         let session = start_in(agent, config, &cwd)?;
 
@@ -358,6 +426,7 @@ impl Engine {
             agent_id,
             Some(cwd),
             session.agent_session().map(String::from),
+            branch,
             session.handle(),
         );
         // Persist the new session now rather than at the next tick: a spawn is
@@ -451,6 +520,8 @@ impl Engine {
     fn info(&self, entry: &Entry<SessionHandle>) -> SessionInfo {
         SessionInfo {
             resumable: !is_running(entry) && self.how_to_resume(entry).is_ok(),
+            cwd: entry.cwd.as_ref().map(|p| p.display().to_string()),
+            branch: entry.branch.clone(),
             ..summary(entry)
         }
     }
@@ -581,6 +652,8 @@ fn summary(entry: &Entry<SessionHandle>) -> SessionInfo {
                 exit_code: snapshot.exit_code,
                 lost: false,
                 resumable: false,
+                cwd: None,
+                branch: None,
             }
         }
         (None, Some(record)) => SessionInfo {
@@ -598,6 +671,8 @@ fn summary(entry: &Entry<SessionHandle>) -> SessionInfo {
             exit_code: record.exit_code,
             lost: record.lost,
             resumable: false,
+            cwd: None,
+            branch: None,
         },
         // The registry only ever creates entries one way or the other. If that
         // changes, an honest "done, unknown" is a better answer than a panic in
@@ -613,6 +688,8 @@ fn summary(entry: &Entry<SessionHandle>) -> SessionInfo {
             exit_code: None,
             lost: true,
             resumable: false,
+            cwd: None,
+            branch: None,
         },
     }
 }

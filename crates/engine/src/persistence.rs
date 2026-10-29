@@ -156,6 +156,7 @@ fn record_for(entry: &Entry<SessionHandle>) -> SessionRecord {
                 agent: entry.agent.clone(),
                 cwd: entry.cwd.clone(),
                 agent_session: entry.agent_session.clone(),
+                branch: entry.branch.clone(),
                 created_unix_ms: entry.created_unix_ms,
                 status: snapshot.status,
                 // Process start plus the offset at which the status began --
@@ -180,6 +181,7 @@ fn record_for(entry: &Entry<SessionHandle>) -> SessionRecord {
             agent: entry.agent.clone(),
             cwd: entry.cwd.clone(),
             agent_session: entry.agent_session.clone(),
+            branch: entry.branch.clone(),
             created_unix_ms: entry.created_unix_ms,
             status: argus_reducer::Status::Done,
             status_since_unix_ms: entry.created_unix_ms,

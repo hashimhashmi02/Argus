@@ -26,6 +26,8 @@ fn session() -> SessionInfo {
         exit_code: None,
         lost: false,
         resumable: false,
+        cwd: None,
+        branch: None,
     }
 }
 
@@ -54,6 +56,7 @@ fn requests_have_a_stable_readable_shape() {
             cwd: None,
             cols: None,
             rows: None,
+            worktree: None,
         })),
         r#"{"version":1,"method":"spawn","agent":"shell"}"#
     );
@@ -94,6 +97,7 @@ fn every_request_round_trips() {
             cwd: Some(r"C:\work\repo".into()),
             cols: Some(100),
             rows: Some(30),
+            worktree: Some("feature/login".into()),
         },
         Request::SendText {
             id: "a".into(),

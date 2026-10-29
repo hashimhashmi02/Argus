@@ -59,6 +59,14 @@ pub enum Request {
         cols: Option<u16>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rows: Option<u16>,
+        /// Run the agent in a git worktree of `cwd`'s repository, on this
+        /// branch: created from the repository's HEAD if it does not exist,
+        /// reused if Argus already made a worktree for it.
+        ///
+        /// Additive: an older engine ignores the field and spawns in `cwd`
+        /// itself, which a client can tell from the reply's `branch`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        worktree: Option<String>,
     },
 
     /// Type text at a session, as if from its keyboard.
@@ -124,6 +132,15 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rows: Option<u16>,
     },
+
+    /// Stop every running session, then the engine itself.
+    ///
+    /// The sessions are killed rather than left to die with the engine, so
+    /// they are remembered as finished -- and resumable, where their agent
+    /// allows it -- not lost. Answered with `done` before the engine exits.
+    ///
+    /// Additive, like `Agents`: an older engine answers `bad_request`.
+    Shutdown,
 }
 
 /// The answer to one request.
@@ -259,6 +276,12 @@ pub struct SessionInfo {
     /// like `lost`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub resumable: bool,
+    /// The folder the agent runs in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// The branch of the git worktree Argus made for the session, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
 }
 
 /// An emulated screen, as text.

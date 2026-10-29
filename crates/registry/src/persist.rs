@@ -69,6 +69,11 @@ pub struct SessionRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_session: Option<String>,
 
+    /// The git branch of the worktree Argus made for this session, if it made
+    /// one. `cwd` is then that worktree's folder, so a resume lands back in it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+
     /// Wall-clock creation time, in Unix milliseconds.
     ///
     /// Wall clock here, unlike everywhere else in Argus, because it has to mean

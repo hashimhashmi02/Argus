@@ -50,6 +50,8 @@ fn fake(id: &str) -> SessionInfo {
         exit_code: None,
         lost: false,
         resumable: false,
+        cwd: None,
+        branch: None,
     }
 }
 

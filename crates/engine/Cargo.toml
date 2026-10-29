@@ -27,7 +27,7 @@ argus-reducer = { path = "../reducer" }
 argus-registry = { path = "../registry" }
 argus-session = { path = "../session" }
 serde_json.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "process", "signal", "sync", "time"] }
 
 [dev-dependencies]
 # To check a watched stream the way a client would: by feeding it to a terminal.
