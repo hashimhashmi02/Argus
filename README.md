@@ -177,9 +177,11 @@ double-click to zoom, and click `y` / `n` in a waiting pane.
 
 ### The demo script
 
-The quickest way to see the engine on its own is the narrated demo. It builds everything, runs a
-private engine against a scratch state file, and walks through three shells at
-once, answering a blocked one from the CLI, and surviving a crash:
+The quickest way to see the engine on its own is the narrated demo. It builds
+everything and runs a private engine against a scratch state file, then walks
+through three shells at once, answering a blocked one from the CLI, two agents
+sharing a repository through separate git worktrees, surviving a crash, and
+being stopped on purpose:
 
 ```powershell
 .\scripts\demo.ps1
