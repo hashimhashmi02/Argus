@@ -626,8 +626,12 @@ reopen the UI straight onto them.
 
 ### Installing
 
-A release is **one zip**, built by `scripts/package.ps1` and published with
-`gh release create` under a tag matching the workspace version: `Argus.exe`
+A release is **one zip**, built by `scripts/package.ps1` and published by the
+`Release` workflow when a tag matching the workspace version is pushed
+(`git tag v0.2.0 && git push origin v0.2.0`); a tag that disagrees with
+`Cargo.toml` fails the run before anything is built. The same workflow builds
+the zip without publishing on a pull request that touches the packaging. It
+holds `Argus.exe`
 (the app), `argus-engine.exe`, `argus-cli.exe` and `manifests\`, side by side,
 with a `SHA256SUMS` beside it. `install.ps1` is the installer, run as
 `irm …/install.ps1 | iex`:
