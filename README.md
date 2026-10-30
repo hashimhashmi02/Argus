@@ -96,10 +96,12 @@ To build the same zip a release ships, and install from it:
 
 A release is that zip and its `SHA256SUMS`, published under a version tag that
 matches the version in `Cargo.toml` — which is what the one-line installer
-downloads:
+downloads. Pushing the tag is enough: the `Release` workflow builds the zip on
+a clean runner and publishes it, and refuses a tag that disagrees with
+`Cargo.toml`.
 
 ```powershell
-gh release create v0.2.0 dist\argus-0.2.0-x86_64-pc-windows-msvc.zip dist\SHA256SUMS --title "Argus v0.2.0" --generate-notes
+git tag v0.2.0; git push origin v0.2.0
 ```
 
 Then the npm package, whose version must match. It downloads that release

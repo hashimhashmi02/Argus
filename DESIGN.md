@@ -628,7 +628,7 @@ reopen the UI straight onto them.
 
 A release is **one zip**, built by `scripts/package.ps1` and published by the
 `Release` workflow when a tag matching the workspace version is pushed
-(`git tag v0.1.0 && git push origin v0.1.0`); a tag that disagrees with
+(`git tag v0.2.0 && git push origin v0.2.0`); a tag that disagrees with
 `Cargo.toml` fails the run before anything is built. The same workflow builds
 the zip without publishing on a pull request that touches the packaging. It
 holds `Argus.exe`
