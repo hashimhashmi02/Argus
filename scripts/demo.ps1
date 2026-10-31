@@ -7,7 +7,9 @@
 
       1. three shells at once -- one idle, one busy, one asking a question
       2. reading the blocked one's screen and answering it from the CLI
-      3. crashing the engine and restarting it: the list survives
+      3. two agents in one repository, each in its own git worktree
+      4. crashing the engine and restarting it: the list survives
+      5. stopping it on purpose: finished, not lost
 
     Everything runs against a private pipe and a scratch state file in %TEMP%,
     so it never touches your real Argus state or a running engine.
@@ -148,8 +150,33 @@ try {
     Wait-Status $asker "done" | Out-Null
     Show-Argus list
 
-    # ---- act 2: crash ------------------------------------------------------
-    Act "6. Crash the engine"
+    # ---- act 2: worktrees ----------------------------------------------------
+    Act "6. Two agents in one repository, without collisions"
+    Say "Agents that share a checkout overwrite each other. Give each one a"
+    Say "branch and the engine puts it in a git worktree of its own."
+    $repo = Join-Path $scratch "shop-api"
+    New-Item -ItemType Directory -Force $repo | Out-Null
+    git -C $repo init -q -b main
+    Set-Content (Join-Path $repo "README.md") "shop-api"
+    git -C $repo add . *> $null
+    git -C $repo -c user.name="Argus Demo" -c user.email="demo@argus.invalid" commit -q -m "first"
+    Say "Repository: $repo (throwaway, one commit on main)"
+
+    Show-Argus spawn shell --cwd $repo --worktree feature/login
+    Show-Argus spawn shell --cwd $repo --worktree fix/cart-total
+    foreach ($id in (CliJson list).sessions | Where-Object { $_.branch }) {
+        Wait-Status $id.id "idle" 60 | Out-Null
+    }
+    Show-Argus list
+    Say "A BRANCH column appears as soon as any session has a worktree."
+
+    Say "Each one is a real checkout of the same repository, on its own branch:"
+    git -C $repo worktree list | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGreen }
+    Say "The main checkout is untouched -- still on $(git -C $repo branch --show-current)."
+    Say "Worktrees outlive their sessions: killing an agent keeps what it wrote."
+
+    # ---- act 3: crash ------------------------------------------------------
+    Act "7. Crash the engine"
     Say "A hard kill -- no chance to save or clean up, as in a real crash."
     Stop-Process -Id $engine.Id -Force
     $engine.WaitForExit()
@@ -158,20 +185,20 @@ try {
     Say "What it had already written to disk:"
     Get-Content $state | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGreen }
 
-    Act "7. Start it again"
+    Act "8. Start it again"
     $engine = Start-Engine
     Show-EngineLog
     Show-Argus list
-    Say "Same ids. The shell that exited before the crash is still 'done (0)'."
-    Say "The two that were running are 'lost', not 'done': their processes went"
-    Say "down with the engine, so they never finished."
+    Say "Same ids, worktree branches included. The shell that exited before the"
+    Say "crash is still 'done (0)'. Everything that was running is 'lost', not"
+    Say "'done': those processes went down with the engine, so they never finished."
 
-    Act "8. A lost session cannot be typed into"
+    Act "9. A lost session cannot be typed into"
     Show-Argus send $busy.Substring(0, 4) "dir"
 
     # ---- optional: a real agent --------------------------------------------
     if ($WithClaude) {
-        Act "9. A real agent: Claude Code"
+        Act "10. A real agent: Claude Code"
         $project = Join-Path $scratch "claude-project"
         New-Item -ItemType Directory -Force $project | Out-Null
         Say "Working folder: $project (throwaway)"
@@ -204,7 +231,7 @@ try {
             Say "demo.txt was not created -- see the screen above for why."
         }
 
-        Act "10. Crash with Claude mid-conversation, then resume it"
+        Act "11. Crash with Claude mid-conversation, then resume it"
         $uuid = ((Get-Content $state | ConvertFrom-Json).sessions | Where-Object { $_.id -eq $claude }).agent_session
         Say "Argus started it with its own conversation id: $uuid"
         Stop-Process -Id $engine.Id -Force
@@ -222,8 +249,26 @@ try {
         Show-Argus screen $claude.Substring(0, 4)
     }
 
+    # ---- last act: stopping on purpose ---------------------------------------
+    Act "$(if ($WithClaude) { 12 } else { 10 }). Stop the engine on purpose"
+    Say "A crash loses whatever was running. A deliberate stop does not."
+    Say "One more shell, so there is something live to stop:"
+    $last = ((& $cli --pipe $pipe spawn shell) -split '\s+')[0]
+    Wait-Status $last "idle" | Out-Null
+    Show-Argus shutdown
+    $engine.WaitForExit(10000) | Out-Null
+    Say "Engine exited: $($engine.HasExited). What it left on disk:"
+    (Get-Content $state | ConvertFrom-Json).sessions | ForEach-Object {
+        $mark = if ($_.id -eq $last) { "  <- stopped by the shutdown" } else { "" }
+        $what = if ($_.lost) { "lost" } else { "done" }
+        Write-Host ("  {0}  {1}{2}" -f $_.id, $what, $mark) -ForegroundColor DarkGreen
+    }
+    Say "The ones the crash took are still 'lost' -- that is history, and it stays."
+    Say "The shell that was running just now is 'done': stopped first, then recorded."
+
     Act "Done"
-    Say "Run it yourself any time: .\scripts\demo.ps1   (add -WithClaude for acts 9 and 10)"
+    Say "Run it yourself any time: .\scripts\demo.ps1"
+    Say "Add -WithClaude for two more acts driving a real Claude Code session."
 }
 finally {
     if ($engine -and -not $engine.HasExited) {
