@@ -11,9 +11,19 @@ use argus_protocol::{
 
 use crate::Capability;
 use serde::Serialize;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
+
+/// What a connection has to be for this module to serve requests over it.
+///
+/// Spelled out as an alias because it appears on every function below, and
+/// because naming it is the point: nothing past `Server::run` knows whether it
+/// is talking over a named pipe or anything else. The listener owns that
+/// question; the request loop does not.
+pub trait Connection: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
+
+impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> Connection for T {}
 
 /// Whatever answers requests. The engine implements this; tests implement a
 /// stub.
@@ -144,11 +154,15 @@ impl Server {
 }
 
 /// Serve one client until it disconnects.
-async fn serve_connection<H: Handler>(
-    mut pipe: NamedPipeServer,
+///
+/// Split into halves up front so the watching phase can drain the read side
+/// from its own task while events go out on the write side.
+pub(crate) async fn serve_connection<S: Connection, H: Handler>(
+    stream: S,
     handler: Arc<H>,
     capability: Capability,
 ) {
+    let (mut reader, mut writer) = tokio::io::split(stream);
     let mut decoder = FrameDecoder::new();
     let mut buf = vec![0u8; 8 * 1024];
 
@@ -167,11 +181,11 @@ async fn serve_connection<H: Handler>(
                     // A watch takes the connection over for good, if it starts.
                     Some(id) => match handler.watch(id).await {
                         Ok(events) => {
-                            if write_frame(&mut pipe, &Response::Ok(Reply::Watching))
+                            if write_frame(&mut writer, &Response::Ok(Reply::Watching))
                                 .await
                                 .is_ok()
                             {
-                                stream_events(&mut pipe, events).await;
+                                stream_events(reader, writer, events).await;
                             }
                             return;
                         }
@@ -184,7 +198,7 @@ async fn serve_connection<H: Handler>(
                     let fatal = error.is_fatal();
                     let response = codec_error_response(&error);
                     // Best effort: tell the client why before hanging up on it.
-                    let _ = write_frame(&mut pipe, &response).await;
+                    let _ = write_frame(&mut writer, &response).await;
                     if fatal {
                         return;
                     }
@@ -192,12 +206,12 @@ async fn serve_connection<H: Handler>(
                 }
             };
 
-            if write_frame(&mut pipe, &response).await.is_err() {
+            if write_frame(&mut writer, &response).await.is_err() {
                 return;
             }
         }
 
-        match pipe.read(&mut buf).await {
+        match reader.read(&mut buf).await {
             // Zero bytes is a clean disconnect. An error is a dirty one. Either
             // way this connection is over, and only this connection: a client
             // that crashes mid-request must not take the daemon with it.
@@ -233,51 +247,66 @@ fn watch_target(envelope: &Envelope) -> Option<String> {
 
 /// Forward watch events to the client until either side is finished.
 ///
-/// The client sends nothing on a watching connection, so the pipe is read only
-/// to notice it hanging up. That matters for a quiet session: without the
-/// read, a client that left would only be discovered at the next write, which
-/// for an idle agent might be hours away -- and until then the engine would
-/// keep a subscription open for nobody.
-async fn stream_events(pipe: &mut NamedPipeServer, mut events: mpsc::Receiver<WatchEvent>) {
-    enum Next {
-        Event(Option<WatchEvent>),
-        Readable(io::Result<()>),
-    }
-
-    let mut scratch = [0u8; 256];
-    loop {
-        // Decided first and acted on after, so the two futures borrowing the
-        // pipe are gone before it is written to.
-        let next = tokio::select! {
-            event = events.recv() => Next::Event(event),
-            ready = pipe.readable() => Next::Readable(ready),
-        };
-        match next {
-            Next::Event(Some(event)) => {
-                if write_frame(pipe, &event).await.is_err() {
-                    return;
-                }
-            }
-            // The handler is done: the session ended, and `Ended` has gone out.
-            Next::Event(None) => return,
-            Next::Readable(Err(_)) => return,
-            Next::Readable(Ok(())) => match pipe.try_read(&mut scratch) {
+/// The client sends nothing on a watching connection, so the read side exists
+/// only to notice it hanging up. That matters for a quiet session: without it,
+/// a client that left would only be discovered at the next write, which for an
+/// idle agent might be hours away -- and until then the engine would keep a
+/// subscription open for nobody.
+///
+/// Draining happens in its own task rather than in a `select!` arm, because the
+/// previous arrangement used `readable()` and `try_read()`, which only a named
+/// pipe has. A task and a `oneshot` say the same thing over any transport.
+async fn stream_events<S: Connection>(
+    mut reader: ReadHalf<S>,
+    mut writer: WriteHalf<S>,
+    mut events: mpsc::Receiver<WatchEvent>,
+) {
+    let (hung_up, mut gone) = oneshot::channel::<()>();
+    let drain = tokio::spawn(async move {
+        let mut scratch = [0u8; 256];
+        loop {
+            match reader.read(&mut scratch).await {
                 // Zero bytes is the client hanging up. Anything it does send is
                 // ignored: there is nothing it can ask on this connection.
-                Ok(0) => return,
+                Ok(0) | Err(_) => break,
                 Ok(_) => {}
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
-                Err(_) => return,
+            }
+        }
+        let _ = hung_up.send(());
+    });
+
+    // `break`, never `return`: the connection is not closed until after the
+    // loop, and skipping that leaves the client waiting forever.
+    loop {
+        tokio::select! {
+            event = events.recv() => match event {
+                Some(event) => {
+                    if write_frame(&mut writer, &event).await.is_err() {
+                        break;
+                    }
+                }
+                // The handler is done: the session ended, and `Ended` has gone out.
+                None => break,
             },
+            _ = &mut gone => break,
         }
     }
+
+    // Dropping the writer is not enough. `split` keeps the stream alive until
+    // both halves are gone, and the drain task owns the read half -- parked in
+    // `read`, so it will not end on its own. Without this the client never sees
+    // EOF and a finished watch hangs, which is exactly how this was found.
+    drain.abort();
 }
 
 fn codec_error_response(error: &CodecError) -> Response {
     Response::Err(RpcError::new(ErrorCode::BadRequest, error.to_string()))
 }
 
-async fn write_frame(pipe: &mut NamedPipeServer, message: &impl Serialize) -> io::Result<()> {
+async fn write_frame<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    message: &impl Serialize,
+) -> io::Result<()> {
     let frame = encode(message).map_err(io::Error::other)?;
-    pipe.write_all(&frame).await
+    writer.write_all(&frame).await
 }
