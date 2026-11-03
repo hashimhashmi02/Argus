@@ -34,9 +34,11 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
+mod capability;
 mod client;
 mod server;
 
+pub use capability::Capability;
 pub use client::{Client, ClientError, ENTER_GAP, Watcher};
 pub use server::{Handler, Server};
 
