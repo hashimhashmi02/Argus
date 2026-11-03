@@ -717,6 +717,62 @@ the reply, so the reply reaches the client before the process starts to exit.
 The CLI sends it as `argus-cli shutdown`; the window asks first, on `Q` or a
 click on "engine up".
 
+### Attaching from another machine
+
+**Not built. This section is the design, written before the code so the hard
+part is argued out first.**
+
+The idea: a teammate watches an agent working in your repository from their own
+machine, and your code never leaves yours. That property is not a transport
+trick. It falls out of where the agent runs. The session is a process on your
+machine, driven by the engine on your machine, and what a watcher receives is
+[the rendered screen](#watching-a-session) — terminal frames, already text.
+The repository is never read, diffed or uploaded, because nothing in the
+watching path has any reason to touch it.
+
+Most of the stack is indifferent to how bytes arrive. `argus-protocol` is serde
+types and length-prefixed framing with no transport in it, and `Handler` is
+`handle(Request) -> Response` plus `watch(id) -> Receiver<WatchEvent>`. The
+coupling lives in two files: `control-server/src/server.rs`, where `Server`
+holds a `NamedPipeServer` and `serve_connection`, `stream_events` and
+`write_frame` take one; and `control-server/src/client.rs`, where `Client` holds
+a `NamedPipeClient` and `connect` branches on `ERROR_FILE_NOT_FOUND` and
+`ERROR_PIPE_BUSY`. Making those generic over `AsyncRead + AsyncWrite` is
+signature work. The one real change is `stream_events`, which notices a client
+hanging up with `readable()` and `try_read`; over a generic reader that becomes
+a `read` future in the same `select!`.
+
+**The transport is not the problem. The permission boundary is.**
+
+[Why a named pipe](#why-a-named-pipe) says it plainly: access control is the
+operating system's job rather than something Argus invents. The pipe's security
+descriptor *is* the authorization model, and `reject_remote_clients` is what
+keeps an API that spawns processes off the network. Every connection today is
+fully trusted because only one user can open the pipe at all. Remote attach
+throws that away, and the engine has to hold the line itself.
+
+So the first thing to build is not a socket. It is a capability on the
+connection that `dispatch` checks before it matches on `Request`:
+
+- **`spawn` is remote code execution.** It runs a program as the user. It must
+  never be reachable from a remote peer, whatever the authentication story.
+- **`kill` and `shutdown` stop other people's work**, and `resume` restarts it.
+  Local only.
+- **`watch` on one named session** is the whole remote feature. A remote
+  capability names the session it is for, and nothing else is reachable through
+  it — not `list`, which would enumerate every session on the machine.
+- **`send_text` is deferred on purpose.** Keystrokes into an agent that edits
+  files and runs commands is most of the way back to the thing the first rule
+  refuses. If it ever lands, it is a separate capability a person grants per
+  session, not a consequence of being allowed to watch.
+
+The first slice, then: read-only watch of one session, over one direct
+connection, authorized by a short-lived token the owner hands over out of band.
+No peer discovery, no rendezvous server, no NAT traversal, no relay. Those are
+reach, and reach is worth nothing until the capability model is right. A
+rendezvous server is also the thing that would undermine the privacy claim if
+it ever carried more than connection setup.
+
 ## Hardening rules
 
 These are not hypothetical. They come from the bug history of Zeus and from the
@@ -766,9 +822,15 @@ Each step is a working, runnable checkpoint — not a half-finished layer.
 | 9 | `resume`: a lost or finished session started again, same id, same conversation | **done** |
 | 10 | Packaging: a release zip, and a one-line `install.ps1` that installs it | **done** |
 | 11 | Worktrees per session, `shutdown`, notifications, and `npm install -g argus-agents` | **done** |
+| 12 | The demo covers worktrees and a deliberate stop | **done** |
+| 13 | Read-only remote `watch` of one session, behind a per-connection capability | planned |
 
 The UI is last on purpose. A UI built on an unstable protocol locks in the
 mistakes of that protocol.
+
+Step 13 is the first step whose risk is not in the code it adds but in what it
+makes reachable — see
+[Attaching from another machine](#attaching-from-another-machine).
 
 ### On `portable-pty` vs raw ConPTY
 
