@@ -719,8 +719,12 @@ click on "engine up".
 
 ### Attaching from another machine
 
-**Not built. This section is the design, written before the code so the hard
-part is argued out first.**
+**Half built.** The permission boundary is in, with no transport behind it yet:
+`Capability` in `argus-control-server` decides what a connection may ask for,
+and the server refuses anything else before it reaches a handler. Nothing
+remote exists, and the local pipe is always `Capability::Full`, so behaviour is
+unchanged. That order is deliberate — the containment is testable on its own,
+and gets built before the thing it is meant to contain.
 
 The idea: a teammate watches an agent working in your repository from their own
 machine, and your code never leaves yours. That property is not a transport
@@ -752,7 +756,10 @@ fully trusted because only one user can open the pipe at all. Remote attach
 throws that away, and the engine has to hold the line itself.
 
 So the first thing to build is not a socket. It is a capability on the
-connection that `dispatch` checks before it matches on `Request`:
+connection, checked in `serve_connection` before a request reaches the handler
+— not inside the engine, which would mean every future `Handler` reimplementing
+it. `Capability::allows` matches `Request` exhaustively, so adding a call to
+the protocol does not compile until someone decides which side it falls on:
 
 - **`spawn` is remote code execution.** It runs a program as the user. It must
   never be reachable from a remote peer, whatever the authentication story.
@@ -823,13 +830,15 @@ Each step is a working, runnable checkpoint — not a half-finished layer.
 | 10 | Packaging: a release zip, and a one-line `install.ps1` that installs it | **done** |
 | 11 | Worktrees per session, `shutdown`, notifications, and `npm install -g argus-agents` | **done** |
 | 12 | The demo covers worktrees and a deliberate stop | **done** |
-| 13 | Read-only remote `watch` of one session, behind a per-connection capability | planned |
+| 13a | `Capability`: a per-connection permission boundary, refused in the server | **done** |
+| 13b | A transport behind it: read-only remote `watch` of one session | planned |
 
 The UI is last on purpose. A UI built on an unstable protocol locks in the
 mistakes of that protocol.
 
 Step 13 is the first step whose risk is not in the code it adds but in what it
-makes reachable — see
+makes reachable, which is why the boundary (13a) ships before the transport
+(13b) rather than alongside it — see
 [Attaching from another machine](#attaching-from-another-machine).
 
 ### On `portable-pty` vs raw ConPTY

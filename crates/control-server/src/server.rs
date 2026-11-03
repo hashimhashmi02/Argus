@@ -8,6 +8,8 @@ use argus_protocol::{
     CodecError, Envelope, ErrorCode, FrameDecoder, PROTOCOL_VERSION, Reply, Request, Response,
     RpcError, WatchEvent, encode,
 };
+
+use crate::Capability;
 use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
@@ -57,6 +59,12 @@ pub struct Server {
     name: String,
     /// The instance waiting for the next client.
     next: NamedPipeServer,
+    /// What a connection accepted here is allowed to ask for.
+    ///
+    /// One value for the whole listener, because every client of a local pipe
+    /// is the same user. A listener reachable from elsewhere would decide this
+    /// per connection, from whatever it authenticated.
+    capability: Capability,
 }
 
 impl Server {
@@ -74,7 +82,22 @@ impl Server {
             .first_pipe_instance(true)
             .reject_remote_clients(true)
             .create(&name)?;
-        Ok(Self { name, next })
+        Ok(Self {
+            name,
+            next,
+            capability: Capability::Full,
+        })
+    }
+
+    /// Serve clients with less than full access.
+    ///
+    /// Nothing in the shipped binaries calls this yet: the local pipe is
+    /// always [`Capability::Full`]. It exists so the restriction can be driven
+    /// end to end by a test before any remote transport is written, rather
+    /// than being first exercised by the thing it is meant to contain.
+    pub fn with_capability(mut self, capability: Capability) -> Self {
+        self.capability = capability;
+        self
     }
 
     pub fn name(&self) -> &str {
@@ -111,13 +134,21 @@ impl Server {
                 .create(&self.name)?;
             let client = std::mem::replace(&mut self.next, replacement);
 
-            tokio::spawn(serve_connection(client, Arc::clone(&handler)));
+            tokio::spawn(serve_connection(
+                client,
+                Arc::clone(&handler),
+                self.capability.clone(),
+            ));
         }
     }
 }
 
 /// Serve one client until it disconnects.
-async fn serve_connection<H: Handler>(mut pipe: NamedPipeServer, handler: Arc<H>) {
+async fn serve_connection<H: Handler>(
+    mut pipe: NamedPipeServer,
+    handler: Arc<H>,
+    capability: Capability,
+) {
     let mut decoder = FrameDecoder::new();
     let mut buf = vec![0u8; 8 * 1024];
 
@@ -126,6 +157,12 @@ async fn serve_connection<H: Handler>(mut pipe: NamedPipeServer, handler: Arc<H>
         // because one read can carry several frames.
         loop {
             let response = match decoder.next_frame::<Envelope>() {
+                // Refused before the request reaches the handler, and before
+                // `watch` can take the connection over, so an engine cannot
+                // forget to check and no handler has to.
+                Ok(Some(envelope)) if !capability.allows(&envelope.request) => {
+                    Response::Err(capability.refusal(&envelope.request))
+                }
                 Ok(Some(envelope)) => match watch_target(&envelope) {
                     // A watch takes the connection over for good, if it starts.
                     Some(id) => match handler.watch(id).await {

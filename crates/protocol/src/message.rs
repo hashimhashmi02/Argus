@@ -335,6 +335,14 @@ pub enum ErrorCode {
     SpawnFailed,
     /// The session exists but has already finished.
     SessionFinished,
+    /// The connection is not permitted to make this call.
+    ///
+    /// Not "the session does not exist" and not "bad request": the call was
+    /// understood and refused. Added for connections that do not arrive over
+    /// this user's own pipe, which is the only kind that can be refused -- a
+    /// local client is allowed everything, so an older one never sees this
+    /// code and cannot fail to parse it.
+    Forbidden,
     /// Something went wrong inside the engine.
     Internal,
 }
