@@ -564,6 +564,17 @@ button.engine:hover {
   opacity: 1;
 }
 
+/* The invite token: long, and every character matters, so it gets the room
+   and a size that stays legible when read back to someone. */
+.prompt-input.is-token {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--bright-yellow);
+  background: var(--black);
+  padding: 0 1ch;
+}
+
 .prompt-hint {
   flex: none;
   padding: 0 1ch;

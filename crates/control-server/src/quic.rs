@@ -167,7 +167,6 @@ impl QuicListener {
             session: session.to_string(),
             fingerprint: self.fingerprint.clone(),
             secret,
-            expires_unix,
         })
     }
 

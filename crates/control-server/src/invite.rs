@@ -64,9 +64,13 @@ pub struct Invite {
     pub fingerprint: String,
     /// Proof of invitation. Never logged, never printed.
     pub secret: [u8; SECRET_LEN],
-    /// Unix seconds after which this is no longer accepted.
-    pub expires_unix: u64,
 }
+
+// Expiry is deliberately absent. It is the issuing server's business, and a
+// client cannot be trusted to enforce its own, so sending one would be
+// decoration -- and a field that does not survive `encode` is a field someone
+// eventually reads and believes. Callers who want to tell a person how long
+// they have can use [`INVITE_LIFETIME`].
 
 /// Bumped if the field layout changes, so an old client says "issued by a newer
 /// version" rather than misreading the parts.
@@ -126,10 +130,6 @@ impl Invite {
             session: (*session).to_string(),
             fingerprint: (*fingerprint).to_string(),
             secret: bytes,
-            // Not carried on the wire. The issuing server remembers when each
-            // invite dies; a client cannot be trusted to enforce its own
-            // expiry, so there is no point sending it one.
-            expires_unix: 0,
         })
     }
 }
@@ -143,7 +143,6 @@ impl fmt::Debug for Invite {
             .field("session", &self.session)
             .field("fingerprint", &self.fingerprint)
             .field("secret", &"<redacted>")
-            .field("expires_unix", &self.expires_unix)
             .finish()
     }
 }
@@ -192,7 +191,6 @@ mod tests {
             session: "3fa1c2d4".into(),
             fingerprint: "a".repeat(64),
             secret: [7u8; SECRET_LEN],
-            expires_unix: 0,
         }
     }
 
@@ -200,6 +198,26 @@ mod tests {
     fn an_invite_survives_a_round_trip() {
         let invite = sample();
         assert_eq!(Invite::decode(&invite.encode()).unwrap(), invite);
+    }
+
+    #[test]
+    fn every_field_is_carried() {
+        // The round trip above only means something if nothing was quietly
+        // left out of `encode`. Each field is changed on its own and has to
+        // come back changed.
+        let base = sample();
+        let mut other = base.clone();
+        other.addr = "127.0.0.1:9999".parse().unwrap();
+        other.session = "9b0e1172".into();
+        other.fingerprint = "b".repeat(64);
+        other.secret = [9u8; SECRET_LEN];
+
+        let decoded = Invite::decode(&other.encode()).unwrap();
+        assert_ne!(decoded.addr, base.addr);
+        assert_ne!(decoded.session, base.session);
+        assert_ne!(decoded.fingerprint, base.fingerprint);
+        assert_ne!(decoded.secret, base.secret);
+        assert_eq!(decoded, other);
     }
 
     #[test]

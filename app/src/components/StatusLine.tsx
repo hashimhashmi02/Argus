@@ -8,6 +8,7 @@ export type Prompt =
   | { kind: "send"; id: string }
   | { kind: "kill"; id: string }
   | { kind: "stop" }
+  | { kind: "invite"; id: string; token: string }
   | { kind: "new" };
 
 export interface Message {
@@ -27,6 +28,7 @@ export type Command =
   | "resume"
   | "start"
   | "stop"
+  | "share"
   | "type"
   | "detach";
 
@@ -100,6 +102,9 @@ export function StatusLine(props: Props) {
       </footer>
     );
   }
+  if (prompt?.kind === "invite") {
+    return <InvitePrompt {...props} prompt={prompt} />;
+  }
   if (prompt?.kind === "new") {
     return <NewPrompt {...props} />;
   }
@@ -157,7 +162,7 @@ function Hints({ engine, list, zoomed, current, typing, prefix, onCommand }: Pro
     if (live) hints.push(["i", "type", "type"]);
     if (resumable) hints.push(["r", "resume", "resume"]);
     hints.push(["c", "new", "new"]);
-    if (live) hints.push([":", "send", "send"], ["x", "kill", "kill"]);
+    if (live) hints.push([":", "send", "send"], ["s", "share", "share"], ["x", "kill", "kill"]);
   }
   return (
     <span className="hints">
@@ -246,6 +251,55 @@ function SendPrompt(props: Props & { id: string; target: string }) {
       />
       <span className="prompt-hint">enter send line · esc cancel</span>
     </form>
+  );
+}
+
+/// The minted token, shown for copying and nothing else.
+function InvitePrompt(props: Props & { prompt: { id: string; token: string } }) {
+  const [copied, setCopied] = useState(false);
+  const name = (() => {
+    const i = props.list.findIndex((s) => s.id === props.prompt.id);
+    return i < 0 ? props.prompt.id : `${i}:${props.list[i].agent}`;
+  })();
+
+  return (
+    <footer className="status is-prompt" role="alertdialog" aria-label="Invite token">
+      <span className="status-text">share {name}</span>
+      {/* Read-only rather than plain text: a person needs to select it, and an
+          input makes select-all work the way they expect. */}
+      <input
+        className="prompt-input is-token"
+        value={props.prompt.token}
+        readOnly
+        spellCheck={false}
+        onFocus={(e) => {
+          e.currentTarget.select();
+          // `select` leaves the view at the end of the text. The start is the
+          // part a person checks against what they were told.
+          e.currentTarget.scrollLeft = 0;
+        }}
+        autoFocus
+      />
+      <button
+        type="button"
+        className="answer"
+        onMouseDown={keepFocus}
+        onClick={() => {
+          // The clipboard can be refused, and a button that silently does
+          // nothing is worse than one that says so. Either way the text stays
+          // selected, so Ctrl+C still works.
+          navigator.clipboard
+            .writeText(props.prompt.token)
+            .then(() => setCopied(true))
+            .catch(() => setCopied(false));
+        }}
+      >
+        {copied ? "copied" : "copy"}
+      </button>
+      <span className="prompt-hint">
+        {copied ? "copied · " : ""}one person · one watch · 10 min · esc close
+      </span>
+    </footer>
   );
 }
 
