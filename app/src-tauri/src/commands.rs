@@ -324,6 +324,18 @@ pub async fn stop_engine(pipe: State<'_, Pipe>) -> Result<()> {
     Ok(())
 }
 
+/// Mint a token letting one person watch this session from another machine.
+///
+/// Refused by the engine unless it was started with `--quic`, which is the
+/// answer the UI shows: remote watching is off until somebody turns it on.
+#[tauri::command]
+pub async fn invite_session(pipe: State<'_, Pipe>, id: String) -> Result<String> {
+    match call(&pipe, Request::Invite { id }).await? {
+        Reply::Invite { invite } => Ok(invite),
+        other => Err(unexpected(other)),
+    }
+}
+
 /// Start the engine as a detached background process.
 #[tauri::command]
 pub async fn start_engine(
