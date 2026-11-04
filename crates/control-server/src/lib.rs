@@ -36,10 +36,14 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 mod capability;
 mod client;
+mod invite;
+mod quic;
 mod server;
 
 pub use capability::Capability;
 pub use client::{Client, ClientError, ENTER_GAP, Watcher};
+pub use invite::{INVITE_LIFETIME, Invite, InviteError};
+pub use quic::{QuicError, QuicListener, connect as quic_connect};
 pub use server::{Handler, Server};
 
 /// The pipe the engine listens on by default: one per Windows user.
