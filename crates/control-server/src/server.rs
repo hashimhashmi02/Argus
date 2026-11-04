@@ -25,6 +25,17 @@ pub trait Connection: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
 
 impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> Connection for T {}
 
+/// Whatever a transport needs kept alive for as long as a [`Client`] is.
+///
+/// A named pipe needs nothing: the handle is the connection. QUIC needs its
+/// endpoint and connection held, and wants them closed rather than left to
+/// time out, so it parks a value here whose `Drop` does that.
+///
+/// [`Client`]: crate::Client
+pub trait Keepalive: Send + 'static {}
+
+impl<T: Send + 'static> Keepalive for T {}
+
 /// Whatever answers requests. The engine implements this; tests implement a
 /// stub.
 ///
@@ -175,7 +186,7 @@ pub(crate) async fn serve_connection<S: Connection, H: Handler>(
                 // `watch` can take the connection over, so an engine cannot
                 // forget to check and no handler has to.
                 Ok(Some(envelope)) if !capability.allows(&envelope.request) => {
-                    Response::Err(capability.refusal(&envelope.request))
+                    Response::Err(capability.refusal())
                 }
                 Ok(Some(envelope)) => match watch_target(&envelope) {
                     // A watch takes the connection over for good, if it starts.

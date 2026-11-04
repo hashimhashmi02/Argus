@@ -140,6 +140,19 @@ enum Command {
     /// Stop a session. Killing one that has already finished succeeds.
     Kill { id: String },
 
+    /// Mint an invite to watch one session from another machine.
+    ///
+    /// Prints one token. Whoever holds it can follow that session's terminal
+    /// and nothing else -- not spawn, not type, not list your other sessions.
+    /// It is good once, for ten minutes.
+    ///
+    /// Hand it over the way you would a password: the engine cannot tell who
+    /// redeems it. Needs an engine started with `--quic <addr>`.
+    Invite {
+        /// Session id, or any prefix naming exactly one session.
+        id: String,
+    },
+
     /// Stop every running session, then the engine.
     ///
     /// The sessions are recorded as finished, not lost, and those whose agent
@@ -210,6 +223,7 @@ impl Command {
             Command::List => Request::List,
             Command::Agents => Request::Agents,
             Command::Shutdown => Request::Shutdown,
+            Command::Invite { id } => Request::Invite { id },
             Command::Spawn {
                 agent,
                 cwd,
@@ -324,6 +338,14 @@ fn print_reply(reply: Reply) {
         Reply::Session { session } => println!("{}", render::session_line(&session)),
         Reply::Screen { screen } => print!("{}", render::screen(&screen)),
         Reply::Agents { agents } => print!("{}", render::agent_table(&agents)),
+        Reply::Invite { invite } => {
+            // The token alone on a line, so it can be piped or copied without
+            // picking up anything around it.
+            println!("{invite}");
+            eprintln!();
+            eprintln!("Hand this to one person. It lets them watch that session");
+            eprintln!("and nothing else, once, within ten minutes.");
+        }
         // Only ever the answer to `watch`, which streams instead of printing
         // a reply.
         Reply::Done | Reply::Watching => {}

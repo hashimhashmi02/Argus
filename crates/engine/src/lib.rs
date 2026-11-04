@@ -64,6 +64,11 @@ pub struct Engine {
     worktree_root: PathBuf,
     /// Set once something has asked the engine to stop.
     stop: watch::Sender<bool>,
+    /// Present only when the engine was started with remote watching enabled.
+    ///
+    /// Off by default. Opening a port is a decision the person running the
+    /// engine makes, not something that happens because a feature exists.
+    quic: Option<Arc<argus_control_server::QuicListener>>,
 }
 
 impl Engine {
@@ -86,6 +91,7 @@ impl Engine {
             dirty: Notify::new(),
             worktree_root: std::env::temp_dir().join("argus-worktrees"),
             stop: watch::Sender::new(false),
+            quic: None,
         })
     }
 
@@ -102,6 +108,17 @@ impl Engine {
         async move {
             let _ = stop.wait_for(|stop| *stop).await;
         }
+    }
+
+    /// Serve remote watchers from `listener`, enabling [`Request::Invite`].
+    pub fn with_quic(mut self, listener: Arc<argus_control_server::QuicListener>) -> Self {
+        self.quic = Some(listener);
+        self
+    }
+
+    /// The listener remote watchers arrive on, if there is one.
+    pub fn quic(&self) -> Option<&Arc<argus_control_server::QuicListener>> {
+        self.quic.as_ref()
     }
 
     /// Make worktrees for sessions under `root` instead.
@@ -337,6 +354,28 @@ impl Engine {
                 ErrorCode::BadRequest,
                 "`watch` is answered as a stream, on a connection of its own",
             )),
+
+            Request::Invite { id } => {
+                let Some(quic) = &self.quic else {
+                    return Err(RpcError::new(
+                        ErrorCode::BadRequest,
+                        "remote watching is off; start the engine with --quic <addr> to enable it",
+                    ));
+                };
+                // Resolved to a full id first, so an invite can never name a
+                // session that does not exist, and a prefix cannot quietly
+                // grant access to whichever session it happens to match later.
+                let entry = self.find(&id)?;
+                let invite = quic.invite(&entry.id).map_err(|e| {
+                    RpcError::new(
+                        ErrorCode::Internal,
+                        format!("could not mint an invite: {e}"),
+                    )
+                })?;
+                Ok(Reply::Invite {
+                    invite: invite.encode(),
+                })
+            }
 
             Request::Shutdown => {
                 for entry in self.registry.list() {

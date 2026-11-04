@@ -61,6 +61,11 @@ impl Capability {
                 // describe the machine, not the session being watched.
                 Request::List | Request::Agents => false,
 
+                // Being able to mint an invite is the right to hand out
+                // access. A watcher who could do it could invite anyone, which
+                // would make the whole boundary decorative.
+                Request::Invite { .. } => false,
+
                 // About the session, but still more than watching it. Left out
                 // of the first slice so that it is added deliberately, with a
                 // reason, rather than by default.
@@ -71,11 +76,11 @@ impl Capability {
 
     /// The refusal to send when [`allows`](Self::allows) says no.
     ///
-    /// Says what is permitted rather than what was attempted. A peer holding a
-    /// session token learns nothing from the answer that it did not already
-    /// know, so the message cannot be used to probe what exists.
-    pub fn refusal(&self, request: &Request) -> RpcError {
-        let _ = request;
+    /// Takes no request on purpose. It says what this connection is permitted
+    /// to do and never what was attempted, so the answer cannot be used to
+    /// probe for what exists -- and a signature that cannot see the request
+    /// cannot start leaking it later.
+    pub fn refusal(&self) -> RpcError {
         let detail = match self {
             Capability::Full => "this connection is not permitted to do that".to_string(),
             Capability::WatchSession { id } => {
@@ -103,6 +108,9 @@ mod tests {
             Request::List,
             Request::Agents,
             Request::Shutdown,
+            Request::Invite {
+                id: "3fa1c2d4".into(),
+            },
             Request::Spawn {
                 agent: "shell".into(),
                 cwd: None,
@@ -178,13 +186,7 @@ mod tests {
 
     #[test]
     fn a_refusal_names_what_is_allowed_not_what_was_tried() {
-        let error = watch_only().refusal(&Request::Spawn {
-            agent: "shell".into(),
-            cwd: Some(r"C:\secrets".into()),
-            cols: None,
-            rows: None,
-            worktree: None,
-        });
+        let error = watch_only().refusal();
         assert_eq!(error.code, ErrorCode::Forbidden);
         assert!(error.message.contains("3fa1c2d4"), "{}", error.message);
         assert!(!error.message.contains("secrets"), "{}", error.message);

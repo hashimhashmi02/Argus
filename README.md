@@ -226,6 +226,7 @@ ids accepted by any unique prefix:
 | `kill <id>` | Stop it |
 | `resume <id>` | Start a finished or lost session again, same id, same folder, same conversation |
 | `shutdown` | Stop every session, then the engine. They are recorded as finished, not lost |
+| `invite <id>` | Mint a token letting one person watch that session from another machine |
 
 ### Worktrees
 

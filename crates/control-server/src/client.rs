@@ -10,7 +10,7 @@ use argus_protocol::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::windows::named_pipe::ClientOptions;
 
-use crate::server::Connection;
+use crate::server::{Connection, Keepalive};
 
 /// `ERROR_FILE_NOT_FOUND`: no pipe by that name exists.
 ///
@@ -69,6 +69,9 @@ pub struct Client {
     stream: Box<dyn Connection>,
     decoder: FrameDecoder,
     buf: Vec<u8>,
+    /// Dropped with the client, so a transport that has more to close than its
+    /// stream gets the chance. See [`Keepalive`].
+    _transport: Option<Box<dyn Keepalive>>,
 }
 
 impl Client {
@@ -92,16 +95,24 @@ impl Client {
             }
         };
 
-        Ok(Self::from_stream(Box::new(pipe)))
+        // A pipe handle is the whole connection; dropping it is enough.
+        Ok(Self::from_stream(Box::new(pipe), None))
     }
 
     /// Wrap a stream that is already connected and past whatever handshake its
     /// transport needs.
-    pub(crate) fn from_stream(stream: Box<dyn Connection>) -> Self {
+    ///
+    /// `transport` is anything that must outlive the stream and be dropped
+    /// with it.
+    pub(crate) fn from_stream(
+        stream: Box<dyn Connection>,
+        transport: Option<Box<dyn Keepalive>>,
+    ) -> Self {
         Self {
             stream,
             decoder: FrameDecoder::new(),
             buf: vec![0u8; 8 * 1024],
+            _transport: transport,
         }
     }
 

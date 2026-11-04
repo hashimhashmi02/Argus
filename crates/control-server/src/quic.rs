@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
 use quinn::{Endpoint, ServerConfig};
@@ -42,6 +43,21 @@ const ALPN: &[u8] = b"argus/1";
 /// does not say which.
 const ACCEPTED: u8 = 1;
 const REFUSED: u8 = 0;
+
+/// How long a peer gets to finish the handshake and present its secret.
+///
+/// Everything before this point is unauthenticated, so without a deadline a
+/// peer that connects and then says nothing holds a task and a connection for
+/// as long as it likes, and enough of them exhaust the host. Ten seconds is far
+/// more than a loopback or WAN handshake needs.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How many peers may be mid-handshake at once.
+///
+/// A second line behind the timeout: the timeout bounds how long each
+/// unauthenticated peer lasts, this bounds how many there can be. Watchers are
+/// invited by hand, so even a small number is never reached in normal use.
+const MAX_HANDSHAKES: usize = 32;
 
 #[derive(Debug, thiserror::Error)]
 pub enum QuicError {
@@ -78,6 +94,8 @@ pub struct QuicListener {
     fingerprint: String,
     /// Keyed by secret. Entries are removed when used, so an invite works once.
     pending: Arc<Mutex<HashMap<[u8; SECRET_LEN], Pending>>>,
+    /// Permits for peers that have not yet proved they were invited.
+    handshakes: Arc<tokio::sync::Semaphore>,
 }
 
 impl QuicListener {
@@ -111,6 +129,7 @@ impl QuicListener {
             endpoint,
             fingerprint,
             pending: Arc::new(Mutex::new(HashMap::new())),
+            handshakes: Arc::new(tokio::sync::Semaphore::new(MAX_HANDSHAKES)),
         })
     }
 
@@ -156,13 +175,18 @@ impl QuicListener {
     fn redeem(&self, secret: &[u8; SECRET_LEN]) -> Result<Capability, InviteError> {
         let mut pending = self.pending.lock().expect("invite table poisoned");
 
-        // Compared against every outstanding invite in constant time rather
-        // than looked up by hash, so the answer does not depend on how much of
-        // a guessed secret was right.
+        // Every comparison is constant time, so no answer reveals how much of
+        // a guessed secret was right. The scan itself stops at a match, which
+        // is fine: that only says a correct secret was found, which the caller
+        // is about to be told anyway.
         let found = pending
             .keys()
             .find(|known| secrets_match(known, secret))
             .copied();
+
+        // Pruned here as well as on mint, so a listener that issues one invite
+        // and never another does not keep it past its life.
+        pending.retain(|key, p| p.expires_unix > now_unix() || found == Some(*key));
 
         let Some(key) = found else {
             return Err(InviteError::Unknown);
@@ -205,10 +229,18 @@ impl QuicListener {
 
             let handler = Arc::clone(&handler);
             let listener = Arc::clone(&listener);
+            // Turned away rather than queued: a peer that cannot be handled
+            // now should be told, not left holding a socket while the host is
+            // already saturated.
+            let Ok(permit) = Arc::clone(&listener.handshakes).try_acquire_owned() else {
+                incoming.refuse();
+                continue;
+            };
+
             tokio::spawn(async move {
                 // One bad peer must never take the listener down with it, so
                 // every failure here ends this connection and nothing else.
-                let _ = listener.accept_one(incoming, handler).await;
+                let _ = listener.accept_one(incoming, handler, permit).await;
             });
         }
     }
@@ -217,13 +249,19 @@ impl QuicListener {
         &self,
         incoming: quinn::Incoming,
         handler: Arc<H>,
+        permit: tokio::sync::OwnedSemaphorePermit,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let connection = incoming.await?;
-        let (mut send, mut recv) = connection.accept_bi().await?;
-
-        // Exactly the secret, and nothing is read past it until it is accepted.
-        let mut secret = [0u8; SECRET_LEN];
-        recv.read_exact(&mut secret).await?;
+        // Every step up to and including the secret is on the clock, because
+        // every step up to there is unauthenticated.
+        let handshake = async {
+            let connection = incoming.await?;
+            let (send, mut recv) = connection.accept_bi().await?;
+            let mut secret = [0u8; SECRET_LEN];
+            recv.read_exact(&mut secret).await?;
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>((connection, send, recv, secret))
+        };
+        let (connection, mut send, recv, secret) =
+            tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake).await??;
 
         let capability = match self.redeem(&secret) {
             Ok(capability) => capability,
@@ -238,6 +276,10 @@ impl QuicListener {
             }
         };
         send.write_all(&[ACCEPTED]).await?;
+
+        // Released once the peer is past the handshake: the limit exists to
+        // bound unauthenticated peers, and this one no longer is.
+        drop(permit);
 
         // From here it is the same request loop the local pipe uses, with the
         // capability doing the containing.
@@ -313,15 +355,33 @@ pub async fn connect(invite: &Invite) -> Result<Client, ClientError> {
         return Err(refused());
     }
 
-    // The endpoint has to outlive the streams: dropping it closes everything
-    // underneath. Handing it to a task that waits for the connection to end
-    // keeps it alive for exactly as long as it is needed.
-    tokio::spawn(async move {
-        connection.closed().await;
-        drop(endpoint);
+    // Both have to outlive the streams -- dropping the endpoint closes
+    // everything underneath it -- and both are dropped with the client. A task
+    // waiting on `closed()` instead would never finish, because nothing else
+    // closes the connection, and would hold the endpoint open for the idle
+    // timeout after every watch.
+    let transport = Box::new(QuicTransport {
+        connection: connection.clone(),
+        _endpoint: endpoint,
     });
 
-    Ok(Client::from_stream(Box::new(tokio::io::join(recv, send))))
+    Ok(Client::from_stream(
+        Box::new(tokio::io::join(recv, send)),
+        Some(transport),
+    ))
+}
+
+/// Closes the connection when the client goes, rather than leaving the peer to
+/// discover it at the idle timeout.
+struct QuicTransport {
+    connection: quinn::Connection,
+    _endpoint: Endpoint,
+}
+
+impl Drop for QuicTransport {
+    fn drop(&mut self) {
+        self.connection.close(0u32.into(), b"watcher done");
+    }
 }
 
 fn refused() -> ClientError {

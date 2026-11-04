@@ -727,6 +727,18 @@ for `Capability::WatchSession`. The local pipe is still always
 and tested before the transport, deliberately: containment first, then the
 thing it contains.
 
+Reachable by a person as of 13d: `argus-engine --quic <addr>` opens the port --
+off by default, because opening one is the operator's decision rather than a
+consequence of the feature existing -- and `argus-cli invite <session>` prints
+one token to hand over. Minting is itself refused to a remote watcher: being
+able to issue an invite is the right to hand out access, and a watcher who
+could do that would make the boundary decorative.
+
+Everything before the secret arrives is unauthenticated, so it is on a clock
+and under a cap: a ten second handshake deadline, and a limit on how many peers
+may be mid-handshake at once. Without the first, a peer that connects and says
+nothing holds a task and a connection for as long as it likes.
+
 Still out of scope, and listed so nobody assumes otherwise: typing
 (`send_text`), more than one session per invite, peer discovery, a rendezvous
 server and NAT traversal. Reaching a peer behind a home router is a separate
@@ -855,6 +867,7 @@ Each step is a working, runnable checkpoint — not a half-finished layer.
 | 13a | `Capability`: a per-connection permission boundary, refused in the server | **done** |
 | 13b | `serve_connection` over any stream, so a second transport can exist | **done** |
 | 13c | QUIC, a certificate pinned by the invite, and a secret exchanged for it | **done** |
+| 13d | `argus-cli invite`, `argus-engine --quic`, and a handshake that cannot be held open | **done** |
 
 The UI is last on purpose. A UI built on an unstable protocol locks in the
 mistakes of that protocol.

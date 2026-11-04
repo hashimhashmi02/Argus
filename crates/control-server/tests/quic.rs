@@ -221,3 +221,43 @@ async fn a_watcher_cannot_watch_a_different_session() {
     assert_eq!(error.code, ErrorCode::Forbidden);
     assert_eq!(server.handler.watched.load(Ordering::Relaxed), 0);
 }
+
+#[tokio::test]
+async fn a_peer_that_never_presents_a_secret_is_dropped() {
+    // The handshake is unauthenticated, so it has to be on a clock. Without
+    // one, a peer that connects and says nothing holds a task and a connection
+    // indefinitely and enough of them exhaust the host.
+    let server = start().await;
+    let invite = server.listener.invite("3fa1c2d4").unwrap();
+
+    // A bare UDP socket: enough to make the server begin a handshake that
+    // will never be completed.
+    let silent = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    silent.send_to(&[0u8; 1200], invite.addr).await.unwrap();
+
+    // The listener must still be serving afterwards, which is the property
+    // that matters: one stalled peer does not deny the next a connection.
+    assert!(
+        quic_connect(&invite).await.is_ok(),
+        "a stalled peer must not block an invited one"
+    );
+}
+
+#[tokio::test]
+async fn dropping_a_watcher_closes_its_connection() {
+    // The client owns the endpoint and the connection, so letting it go has to
+    // close them. Held by a task waiting on `closed()` instead, nothing would
+    // ever close them and every finished watch would leak until the idle
+    // timeout.
+    let server = start().await;
+
+    for _ in 0..5 {
+        let invite = server.listener.invite("3fa1c2d4").unwrap();
+        let client = quic_connect(&invite).await.unwrap();
+        drop(client);
+    }
+
+    // Still able to take another watcher after five have come and gone.
+    let invite = server.listener.invite("3fa1c2d4").unwrap();
+    assert!(quic_connect(&invite).await.is_ok());
+}

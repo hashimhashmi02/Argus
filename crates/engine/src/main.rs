@@ -17,17 +17,23 @@
 //! sessions themselves do not: when the engine stops, its pseudo-consoles close
 //! and every child process goes with them. Those come back listed as `lost`.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use argus_control_server::{Server, default_pipe_name, pipe_path};
+use argus_control_server::{QuicListener, Server, default_pipe_name, pipe_path};
 use argus_engine::{Engine, default_state_path};
 
 struct Args {
     manifests: PathBuf,
     pipe: String,
     state: PathBuf,
+    /// Where to accept remote watchers, if anywhere.
+    ///
+    /// `None` by default: opening a port is the operator's decision, not a
+    /// consequence of the feature existing.
+    quic: Option<SocketAddr>,
 }
 
 /// `manifests\` beside this executable, where an install puts it; otherwise
@@ -51,6 +57,7 @@ fn parse_args() -> Result<Args> {
         manifests: default_manifest_dir(),
         pipe: default_pipe_name(),
         state: default_state_path(),
+        quic: None,
     };
 
     let mut argv = std::env::args().skip(1);
@@ -61,8 +68,20 @@ fn parse_args() -> Result<Args> {
             }
             "--pipe" => args.pipe = pipe_path(&argv.next().context("--pipe needs a name")?),
             "--state" => args.state = argv.next().context("--state needs a file path")?.into(),
+            "--quic" => {
+                let value = argv
+                    .next()
+                    .context("--quic needs an address, e.g. 0.0.0.0:4433")?;
+                args.quic =
+                    Some(value.parse().with_context(|| {
+                        format!("`{value}` is not an address like 0.0.0.0:4433")
+                    })?);
+            }
             "-h" | "--help" => {
-                println!("usage: argus-engine [--manifests DIR] [--pipe NAME] [--state FILE]");
+                println!(
+                    "usage: argus-engine [--manifests DIR] [--pipe NAME] [--state FILE] \
+                     [--quic ADDR]"
+                );
                 std::process::exit(0);
             }
             other => bail!("unknown argument `{other}` (try --help)"),
@@ -115,11 +134,32 @@ async fn main() -> Result<()> {
         );
     }
 
+    // Bound before the engine is wrapped in an Arc, so a port that cannot be
+    // opened stops startup rather than surfacing later as a confusing refusal
+    // when somebody asks for an invite.
+    let quic = match args.quic {
+        Some(addr) => {
+            let listener = Arc::new(QuicListener::bind(addr)?);
+            eprintln!(
+                "[argus-engine] remote watching on {} (certificate {})",
+                listener.local_addr()?,
+                &listener.fingerprint()[..16]
+            );
+            eprintln!("[argus-engine] mint a token with: argus-cli invite <session>");
+            Some(listener)
+        }
+        None => None,
+    };
+
     eprintln!("[argus-engine] listening on {}", server.name());
     eprintln!("[argus-engine] Ctrl+C to stop");
 
     // One shutdown signal, observed by both the server and the persister:
     // Ctrl+C, or a client sending `shutdown`.
+    let engine = match &quic {
+        Some(listener) => engine.with_quic(Arc::clone(listener)),
+        None => engine,
+    };
     let engine = Arc::new(engine);
     let on_ctrl_c = Arc::clone(&engine);
     tokio::spawn(async move {
@@ -140,6 +180,9 @@ async fn main() -> Result<()> {
         }
     });
     let persister = tokio::spawn(Arc::clone(&engine).run_persister(engine.stopped()));
+    if let Some(listener) = quic {
+        tokio::spawn(Arc::clone(&listener).serve_forever(Arc::clone(&engine), engine.stopped()));
+    }
 
     server.run(Arc::clone(&engine), engine.stopped()).await?;
 
