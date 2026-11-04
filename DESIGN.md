@@ -719,12 +719,18 @@ click on "engine up".
 
 ### Attaching from another machine
 
-**Half built.** The permission boundary is in, with no transport behind it yet:
-`Capability` in `argus-control-server` decides what a connection may ask for,
-and the server refuses anything else before it reaches a handler. Nothing
-remote exists, and the local pipe is always `Capability::Full`, so behaviour is
-unchanged. That order is deliberate — the containment is testable on its own,
-and gets built before the thing it is meant to contain.
+**Built, in its first slice.** `Capability` decides what a connection may ask
+for and the server refuses anything else before it reaches a handler;
+`QuicListener` accepts a watcher holding an [`Invite`] and exchanges its secret
+for `Capability::WatchSession`. The local pipe is still always
+`Capability::Full`, so nothing about local use changed. The boundary was built
+and tested before the transport, deliberately: containment first, then the
+thing it contains.
+
+Still out of scope, and listed so nobody assumes otherwise: typing
+(`send_text`), more than one session per invite, peer discovery, a rendezvous
+server and NAT traversal. Reaching a peer behind a home router is a separate
+problem from being allowed to.
 
 The idea: a teammate watches an agent working in your repository from their own
 machine, and your code never leaves yours. That property is not a transport
@@ -780,6 +786,22 @@ reach, and reach is worth nothing until the capability model is right. A
 rendezvous server is also the thing that would undermine the privacy claim if
 it ever carried more than connection setup.
 
+QUIC carries it, not TCP, because the encryption is then not a thing anyone can
+forget to add: an agent's screen is its file paths and command output, and that
+should not cross a network in clear text. There is no authority that has heard
+of a laptop, so the server mints a certificate per run and the invite carries
+its fingerprint; the watcher accepts that certificate and no other. That is
+stricter than web PKI, not weaker -- one certificate rather than any a CA would
+sign -- and the TLS 1.3 signature is still checked, so a fingerprint alone
+cannot be replayed by somebody who merely saw the certificate.
+
+Holding the certificate is not authorization, since anyone who learns the
+address can complete a handshake. So the client's first bytes are the invite's
+secret, and the answer to an unknown secret, an expired one and one already
+used is identical: which of those it was is exactly what an attacker would like
+to learn. Secrets are compared in constant time, and consumed even when
+refused, so a single-use token cannot be retried after a near miss.
+
 ## Hardening rules
 
 These are not hypothetical. They come from the bug history of Zeus and from the
@@ -831,7 +853,8 @@ Each step is a working, runnable checkpoint — not a half-finished layer.
 | 11 | Worktrees per session, `shutdown`, notifications, and `npm install -g argus-agents` | **done** |
 | 12 | The demo covers worktrees and a deliberate stop | **done** |
 | 13a | `Capability`: a per-connection permission boundary, refused in the server | **done** |
-| 13b | A transport behind it: read-only remote `watch` of one session | planned |
+| 13b | `serve_connection` over any stream, so a second transport can exist | **done** |
+| 13c | QUIC, a certificate pinned by the invite, and a secret exchanged for it | **done** |
 
 The UI is last on purpose. A UI built on an unstable protocol locks in the
 mistakes of that protocol.
