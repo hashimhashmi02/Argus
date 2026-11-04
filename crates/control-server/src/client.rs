@@ -8,7 +8,9 @@ use argus_protocol::{
     encode,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
+use tokio::net::windows::named_pipe::ClientOptions;
+
+use crate::server::Connection;
 
 /// `ERROR_FILE_NOT_FOUND`: no pipe by that name exists.
 ///
@@ -58,8 +60,13 @@ pub enum ClientError {
 }
 
 /// A connection to the engine.
+///
+/// Boxed rather than generic so that the type does not change shape depending
+/// on how it got there. Every caller -- the CLI, the UI -- holds a `Client`
+/// whichever transport is underneath, and one virtual call per read on an
+/// interactive tool costs nothing worth measuring.
 pub struct Client {
-    pipe: NamedPipeClient,
+    stream: Box<dyn Connection>,
     decoder: FrameDecoder,
     buf: Vec<u8>,
 }
@@ -85,11 +92,17 @@ impl Client {
             }
         };
 
-        Ok(Self {
-            pipe,
+        Ok(Self::from_stream(Box::new(pipe)))
+    }
+
+    /// Wrap a stream that is already connected and past whatever handshake its
+    /// transport needs.
+    pub(crate) fn from_stream(stream: Box<dyn Connection>) -> Self {
+        Self {
+            stream,
             decoder: FrameDecoder::new(),
             buf: vec![0u8; 8 * 1024],
-        })
+        }
     }
 
     /// Send one request and wait for its reply.
@@ -99,7 +112,7 @@ impl Client {
     /// matters.
     pub async fn call(&mut self, request: Request) -> Result<Reply, ClientError> {
         let frame = encode(&Envelope::new(request))?;
-        self.pipe.write_all(&frame).await?;
+        self.stream.write_all(&frame).await?;
 
         match self.next_frame::<Response>().await? {
             Some(response) => Result::<Reply, RpcError>::from(response).map_err(ClientError::Rpc),
@@ -158,7 +171,7 @@ impl Client {
             if let Some(frame) = self.decoder.next_frame::<T>()? {
                 return Ok(Some(frame));
             }
-            let n = self.pipe.read(&mut self.buf).await?;
+            let n = self.stream.read(&mut self.buf).await?;
             if n == 0 {
                 return Ok(None);
             }
