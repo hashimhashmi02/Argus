@@ -139,7 +139,15 @@ async fn a_session_gets_a_worktree_on_a_new_branch_and_a_second_one_shares_it() 
     let first = spawn(&engine.pipe, &repo, "feature/login").await.unwrap();
     assert_eq!(first.branch.as_deref(), Some("feature/login"));
     let folder = PathBuf::from(first.cwd.clone().unwrap());
-    assert_eq!(folder, root.join("myrepo").join("feature-login"));
+    // Canonicalised, because this asserts "the same directory" and not "the
+    // same string". The engine reports the path git gives it, while the test
+    // builds one from `temp_dir()`, and on a machine with 8.3 short names
+    // those differ -- `runneradmin` against `RUNNER~1` -- while naming one
+    // folder.
+    assert_eq!(
+        std::fs::canonicalize(&folder).unwrap(),
+        std::fs::canonicalize(root.join("myrepo").join("feature-login")).unwrap()
+    );
     assert!(
         folder.join("README.md").is_file(),
         "the worktree is checked out"
