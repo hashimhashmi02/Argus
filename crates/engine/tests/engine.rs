@@ -583,3 +583,23 @@ async fn respond_to_an_unknown_session_is_an_unknown_session_error() {
         ErrorCode::UnknownSession
     );
 }
+
+#[tokio::test]
+async fn an_invite_is_refused_when_remote_watching_is_off() {
+    // Off is the default. Asking for an invite then has to say so plainly,
+    // rather than failing somewhere further in with a confusing reason.
+    let engine = start("invite-off");
+    let mut client = Client::connect(&engine.pipe).await.unwrap();
+    let session = spawn_shell(&mut client).await;
+
+    // The message has to name the flag that turns it on, so whoever hit this
+    // learns what to do rather than only that it did not work.
+    let message = match client.call(Request::Invite { id: session.id }).await {
+        Err(ClientError::Rpc(error)) => {
+            assert_eq!(error.code, ErrorCode::BadRequest);
+            error.message
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+    assert!(message.contains("--quic"), "{message}");
+}

@@ -133,6 +133,16 @@ pub enum Request {
         rows: Option<u16>,
     },
 
+    /// Mint an invite letting one person watch one session from elsewhere.
+    ///
+    /// The reply is the token, as one opaque string to hand over. Refused
+    /// unless the engine was started with remote watching enabled, and refused
+    /// to anyone who is not local: an invite grants access, so being able to
+    /// mint one is the right to hand out access.
+    ///
+    /// Additive, like `Agents`: an older engine answers `bad_request`.
+    Invite { id: String },
+
     /// Stop every running session, then the engine itself.
     ///
     /// The sessions are killed rather than left to die with the engine, so
@@ -188,6 +198,10 @@ pub enum Reply {
     },
     Agents {
         agents: Vec<AgentInfo>,
+    },
+    /// An invite token, ready to hand over. See [`Request::Invite`].
+    Invite {
+        invite: String,
     },
     /// The request was carried out and there is nothing more to say.
     Done,

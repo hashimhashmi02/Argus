@@ -118,6 +118,11 @@ async fn a_session_token_is_refused_everything_but_its_own_watch() {
         Request::Kill {
             id: "3fa1c2d4".into(),
         },
+        // Minting an invite is the right to hand out access, so a watcher must
+        // never reach it -- even for the session it is already watching.
+        Request::Invite {
+            id: "3fa1c2d4".into(),
+        },
         Request::ReadScreen {
             id: "3fa1c2d4".into(),
         },
