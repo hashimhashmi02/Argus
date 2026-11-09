@@ -35,6 +35,9 @@ const LIMIT: Duration = Duration::from_secs(20);
 /// `cmd /k` runs a command and keeps the shell. `sh` has no such flag, so it
 /// runs the echo and then replaces itself with an interactive shell, which
 /// leaves the same thing on screen and the same process waiting.
+///
+/// The `sh` form prints the working directory too, because [`ran_in`] has to
+/// read it off the screen and only `cmd.exe` puts it in the prompt.
 #[cfg(windows)]
 fn announce_then_stay(what: &str) -> Vec<String> {
     vec![
@@ -49,8 +52,27 @@ fn announce_then_stay(what: &str) -> Vec<String> {
 fn announce_then_stay(what: &str) -> Vec<String> {
     vec![
         "-c".to_string(),
-        format!("echo {what} {{session_uuid}}; exec /bin/sh -i"),
+        format!("echo {what} {{session_uuid}}; pwd; exec /bin/sh -i"),
     ]
+}
+
+/// Whether `screen` shows a shell sitting in a directory named `leaf`.
+///
+/// `cmd.exe` carries the working directory in its prompt, so the name is
+/// already there with the `>` after it. `sh` draws a bare `$`, so
+/// [`announce_then_stay`] has it print the directory and this looks for the
+/// line it printed.
+fn ran_in(screen: &str, leaf: &str) -> bool {
+    #[cfg(windows)]
+    {
+        screen.contains(&format!("{leaf}>"))
+    }
+    #[cfg(unix)]
+    {
+        screen
+            .lines()
+            .any(|line| line.starts_with('/') && line.trim_end().ends_with(leaf))
+    }
 }
 
 /// Keys to type at a session that is no longer running. Nothing runs them --
@@ -541,7 +563,7 @@ async fn a_lost_session_is_resumed_under_its_own_id_in_its_own_folder() {
     );
     assert!(!screen.contains("new "), "{screen}");
     assert!(
-        screen.contains("the project>"),
+        ran_in(&screen, "the project"),
         "running in the folder it ran in before:\n{screen}"
     );
 
