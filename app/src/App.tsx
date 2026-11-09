@@ -170,6 +170,22 @@ export default function App() {
     }
   }, [starting, say, fail, sessions, agents]);
 
+  // Minting is a round trip to the engine, so the prompt only opens once a
+  // token exists -- an empty box that fills in later reads as a bug.
+  const share = useCallback(
+    async (id: string) => {
+      say(`minting an invite for ${id}`);
+      try {
+        const token = await api.invite(id);
+        setMessage(undefined);
+        setPrompt({ kind: "invite", id, token });
+      } catch (err) {
+        fail(err);
+      }
+    },
+    [say, fail],
+  );
+
   const resume = useCallback(
     async (id: string) => {
       say(`resuming ${id}`);
@@ -244,9 +260,12 @@ export default function App() {
         case "stop":
           if (!notRunning) setPrompt({ kind: "stop" });
           break;
+        case "share":
+          if (live) share(currentSession.id);
+          break;
       }
     },
-    [apply, current, currentSession, notRunning, resume, startEngine, zoomed],
+    [apply, current, currentSession, notRunning, resume, share, startEngine, zoomed],
   );
 
   // The key typed after the terminal's prefix (Ctrl+B), as tmux binds them.
@@ -349,6 +368,8 @@ export default function App() {
         run("start");
       } else if (e.key === "Q") {
         run("stop");
+      } else if (e.key === "s" && !notRunning) {
+        run("share");
       } else {
         return;
       }
@@ -512,6 +533,7 @@ function NoSessions({ loading, onNew }: { loading: boolean; onNew: () => void })
     [":", "send-keys", "type one line into the current pane"],
     ["x", "kill-pane", "stop the current session, after asking"],
     ["r", "respawn-pane", "start a finished or lost session again, where it left off"],
+    ["s", "", "mint an invite to watch the current session from elsewhere"],
     ["Q", "kill-server", "stop the engine and every session, after asking"],
   ];
   return (

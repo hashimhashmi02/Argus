@@ -85,6 +85,8 @@ export const api = {
   respond: (id: string, approve: boolean) => invoke<void>("respond", { id, approve }),
   kill: (id: string) => invoke<void>("kill_session", { id }),
   resume: (id: string) => invoke<SessionInfo>("resume_session", { id }),
+  /** Mint a token letting one person watch this session from elsewhere. */
+  invite: (id: string) => invoke<string>("invite_session", { id }),
   startEngine: () => invoke<void>("start_engine"),
   stopEngine: () => invoke<void>("stop_engine"),
 };
