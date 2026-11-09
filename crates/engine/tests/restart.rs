@@ -21,52 +21,131 @@ use serde_json::Value;
 
 const LIMIT: Duration = Duration::from_secs(20);
 
-fn cmd_exe() -> PathBuf {
+/// A shell that exists here, the arguments that make it print a prompt, and
+/// the prompt to look for.
+///
+/// These tests need idle to be detectable, which means a shell that shows
+/// something recognisable while it waits. `cmd.exe` always does. `sh` only
+/// does when it is interactive, hence `-i`; its prompt is `$ ` as a user and
+/// `# ` as root, and macOS answers `sh-3.2$ `, so the pattern matches the
+/// ending rather than the whole line.
+/// Arguments that make the shell say `what` and the session's conversation id,
+/// then stay open waiting for input.
+///
+/// `cmd /k` runs a command and keeps the shell. `sh` has no such flag, so it
+/// runs the echo and then replaces itself with an interactive shell, which
+/// leaves the same thing on screen and the same process waiting.
+///
+/// The `sh` form prints the working directory too, because [`ran_in`] has to
+/// read it off the screen and only `cmd.exe` puts it in the prompt.
+#[cfg(windows)]
+fn announce_then_stay(what: &str) -> Vec<String> {
+    vec![
+        "/k".to_string(),
+        "echo".to_string(),
+        what.to_string(),
+        "{session_uuid}".to_string(),
+    ]
+}
+
+#[cfg(unix)]
+fn announce_then_stay(what: &str) -> Vec<String> {
+    vec![
+        "-c".to_string(),
+        format!("echo {what} {{session_uuid}}; pwd; exec /bin/sh -i"),
+    ]
+}
+
+/// Whether `screen` shows a shell sitting in a directory named `leaf`.
+///
+/// `cmd.exe` carries the working directory in its prompt, so the name is
+/// already there with the `>` after it. `sh` draws a bare `$`, so
+/// [`announce_then_stay`] has it print the directory and this looks for the
+/// line it printed.
+fn ran_in(screen: &str, leaf: &str) -> bool {
+    #[cfg(windows)]
+    {
+        screen.contains(&format!("{leaf}>"))
+    }
+    #[cfg(unix)]
+    {
+        screen
+            .lines()
+            .any(|line| line.starts_with('/') && line.trim_end().ends_with(leaf))
+    }
+}
+
+/// Keys to type at a session that is no longer running. Nothing runs them --
+/// the point is the refusal -- so they need not name a command.
+const SOME_KEYS: &str = "anything\r";
+
+#[cfg(windows)]
+fn test_shell() -> (PathBuf, Vec<String>, &'static str) {
     let root = std::env::var_os("SystemRoot").expect("SystemRoot should be set on Windows");
-    PathBuf::from(root).join("System32").join("cmd.exe")
+    (
+        PathBuf::from(root).join("System32").join("cmd.exe"),
+        Vec::new(),
+        r"(?m)^[A-Za-z]:\\[^\n]*>$",
+    )
+}
+
+#[cfg(unix)]
+fn test_shell() -> (PathBuf, Vec<String>, &'static str) {
+    (
+        PathBuf::from("/bin/sh"),
+        vec!["-i".to_string()],
+        r"(?m)[$#] ?$",
+    )
 }
 
 fn manifest_json() -> String {
+    let shell = test_shell();
     format!(
         r#"{{
           "id": "test-shell",
           "display_name": "Test Shell",
-          "launch": {{ "program": {program} }},
+          "launch": {{ "program": {program}, "args": {args} }},
           "rules": [
             {{
               "name": "cmd-prompt",
               "status": "idle",
-              "pattern": "(?m)^[A-Za-z]:\\\\[^\\n]*>$",
+              "pattern": {pattern},
               "region": {{ "last_lines": 1 }}
             }}
           ]
         }}"#,
-        program = serde_json::to_string(&cmd_exe()).unwrap(),
+        program = serde_json::to_string(&shell.0).unwrap(),
+        args = serde_json::to_string(&shell.1).unwrap(),
+        pattern = serde_json::to_string(shell.2).unwrap(),
     )
 }
 
 /// A `cmd.exe` that can be resumed, and says on screen which way it started
 /// and with which conversation id.
 fn resumable_manifest_json() -> String {
+    let shell = test_shell();
     format!(
         r#"{{
           "id": "test-resumable",
           "display_name": "Test Resumable",
           "launch": {{
             "program": {program},
-            "new_session_args": ["/k", "echo", "new", "{{session_uuid}}"]
+            "new_session_args": {new_args}
           }},
-          "resume": {{ "args": ["/k", "echo", "resumed", "{{session_uuid}}"] }},
+          "resume": {{ "args": {resume_args} }},
           "rules": [
             {{
               "name": "cmd-prompt",
               "status": "idle",
-              "pattern": "(?m)^[A-Za-z]:\\\\[^\\n]*>$",
+              "pattern": {pattern},
               "region": {{ "last_lines": 1 }}
             }}
           ]
         }}"#,
-        program = serde_json::to_string(&cmd_exe()).unwrap(),
+        program = serde_json::to_string(&shell.0).unwrap(),
+        new_args = serde_json::to_string(&announce_then_stay("new")).unwrap(),
+        resume_args = serde_json::to_string(&announce_then_stay("resumed")).unwrap(),
+        pattern = serde_json::to_string(shell.2).unwrap(),
     )
 }
 
@@ -325,7 +404,7 @@ async fn the_session_list_survives_a_crash() {
     match client
         .call(Request::SendText {
             id: running.clone(),
-            text: "dir\r".into(),
+            text: SOME_KEYS.into(),
         })
         .await
     {
@@ -452,7 +531,7 @@ async fn a_lost_session_is_resumed_under_its_own_id_in_its_own_folder() {
     match client
         .call(Request::SendText {
             id: resumable.clone(),
-            text: "dir\r".into(),
+            text: SOME_KEYS.into(),
         })
         .await
     {
@@ -484,7 +563,7 @@ async fn a_lost_session_is_resumed_under_its_own_id_in_its_own_folder() {
     );
     assert!(!screen.contains("new "), "{screen}");
     assert!(
-        screen.contains("the project>"),
+        ran_in(&screen, "the project"),
         "running in the folder it ran in before:\n{screen}"
     );
 

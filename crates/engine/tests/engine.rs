@@ -17,30 +17,107 @@ use tokio::sync::oneshot;
 
 const LIMIT: Duration = Duration::from_secs(20);
 
-fn cmd_exe() -> PathBuf {
+/// A shell that exists here, the arguments that make it print a prompt, and
+/// the prompt to look for.
+///
+/// These tests need idle to be detectable, which means a shell that shows
+/// something recognisable while it waits. `cmd.exe` always does. `sh` only
+/// does when it is interactive, hence `-i`; its prompt is `$ ` as a user and
+/// `# ` as root, and macOS answers `sh-3.2$ `, so the pattern matches the
+/// ending rather than the whole line.
+/// Keys to type at a session that is no longer running. Nothing runs them --
+/// the point is the refusal -- so they need not name a command.
+const SOME_KEYS: &str = "anything\r";
+
+/// A directory that cannot be there, so spawning in it has to fail.
+///
+/// Spelt for the platform: a Unix kernel would take the Windows form as one
+/// very oddly named entry in the current directory, which fails for the right
+/// reason by accident rather than because the path is absolute and absent.
+#[cfg(windows)]
+fn a_directory_that_is_not_there() -> &'static str {
+    r"C:\definitely\not\a\real\directory"
+}
+
+#[cfg(unix)]
+fn a_directory_that_is_not_there() -> &'static str {
+    "/definitely/not/a/real/directory"
+}
+
+/// Whether `line` ends with a shell prompt.
+///
+/// `cmd.exe` ends its prompt with `>`, `sh` with `$` as a user and `#` as
+/// root. Testing the last character keeps this clear of the rest of the
+/// prompt, which carries the working directory on Windows, the shell's own
+/// name on macOS, and nothing at all on Linux.
+fn ends_with_a_prompt(line: &str) -> bool {
+    #[cfg(windows)]
+    {
+        line.ends_with('>')
+    }
+    #[cfg(unix)]
+    {
+        line.ends_with('$') || line.ends_with('#')
+    }
+}
+
+/// Keys that make the shell print something, and the text it should print.
+///
+/// The shell has to expand the expression, so what the test looks for never
+/// appears in the typed line itself -- otherwise the echo of the keys alone
+/// would satisfy it, and the test would pass without the shell running
+/// anything. `%OS%` is cmd's; arithmetic expansion is POSIX sh's.
+#[cfg(windows)]
+fn echo_an_expansion() -> (&'static str, &'static str) {
+    ("echo watched-%OS%\r", "watched-Windows_NT")
+}
+
+#[cfg(unix)]
+fn echo_an_expansion() -> (&'static str, &'static str) {
+    ("echo watched-$((6 * 7))\r", "watched-42")
+}
+
+#[cfg(windows)]
+fn test_shell() -> (PathBuf, Vec<String>, &'static str) {
     let root = std::env::var_os("SystemRoot").expect("SystemRoot should be set on Windows");
-    PathBuf::from(root).join("System32").join("cmd.exe")
+    (
+        PathBuf::from(root).join("System32").join("cmd.exe"),
+        Vec::new(),
+        r"(?m)^[A-Za-z]:\\[^\n]*>$",
+    )
+}
+
+#[cfg(unix)]
+fn test_shell() -> (PathBuf, Vec<String>, &'static str) {
+    (
+        PathBuf::from("/bin/sh"),
+        vec!["-i".to_string()],
+        r"(?m)[$#] ?$",
+    )
 }
 
 /// `cmd.exe` by absolute path, so the test does not depend on how `PATH` is
 /// formatted by whichever shell ran `cargo`.
 fn shell_agent() -> Agent {
+    let shell = test_shell();
     let json = format!(
         r#"{{
           "id": "test-shell",
           "display_name": "Test Shell",
-          "launch": {{ "program": {program} }},
+          "launch": {{ "program": {program}, "args": {args} }},
           "keys": {{ "approve": "enter", "deny": "ctrl-c" }},
           "rules": [
             {{
               "name": "cmd-prompt",
               "status": "idle",
-              "pattern": "(?m)^[A-Za-z]:\\\\[^\\n]*>$",
+              "pattern": {pattern},
               "region": {{ "last_lines": 3 }}
             }}
           ]
         }}"#,
-        program = serde_json::to_string(&cmd_exe()).unwrap(),
+        program = serde_json::to_string(&shell.0).unwrap(),
+        args = serde_json::to_string(&shell.1).unwrap(),
+        pattern = serde_json::to_string(shell.2).unwrap(),
     );
     Agent::from_json(&json, "test-shell.json").unwrap()
 }
@@ -278,7 +355,7 @@ async fn errors_are_specific_enough_to_act_on() {
 
     let bad_cwd = Request::Spawn {
         agent: "test-shell".into(),
-        cwd: Some(r"C:\definitely\not\a\real\directory".into()),
+        cwd: Some(a_directory_that_is_not_there().into()),
         cols: None,
         rows: None,
         worktree: None,
@@ -324,7 +401,7 @@ async fn typing_into_a_finished_session_is_reported_but_killing_it_again_is_fine
         match client
             .call(Request::SendText {
                 id: id.clone(),
-                text: "dir\r".into(),
+                text: SOME_KEYS.into(),
             })
             .await
         {
@@ -427,7 +504,7 @@ async fn respond_sends_the_keys_from_the_agents_own_manifest() {
         .await
         .unwrap();
 
-    // Ctrl+C at a cmd prompt abandons the typed line and draws a fresh, bare
+    // Ctrl+C at a prompt abandons the typed line and draws a fresh, bare
     // prompt. Waiting for that bare prompt is what proves a key arrived at all:
     // "the command never ran" alone would also be true if deny sent nothing.
     let view = poll_until(&mut client, &id, "a fresh prompt after Ctrl+C", |v| {
@@ -435,7 +512,7 @@ async fn respond_sends_the_keys_from_the_agents_own_manifest() {
             .iter()
             .rev()
             .find(|line| !line.trim().is_empty())
-            .is_some_and(|last| last.ends_with('>'))
+            .is_some_and(|last| ends_with_a_prompt(last))
     })
     .await;
     assert!(
@@ -480,19 +557,25 @@ async fn a_watcher_sees_the_terminal_and_typing_from_another_connection() {
         }
         other => panic!("a watch must start with a repaint, got {other:?}"),
     };
+    let (keys, printed) = echo_an_expansion();
     assert!(
-        terminal.screen().text().contains('>'),
-        "the prompt is drawn"
+        terminal
+            .screen()
+            .text()
+            .lines()
+            .any(|line| ends_with_a_prompt(line.trim_end())),
+        "the prompt is drawn:\n{}",
+        terminal.screen().text()
     );
 
     client
         .call(Request::SendText {
             id: session.id.clone(),
-            text: "echo watched-%OS%\r".into(),
+            text: keys.into(),
         })
         .await
         .unwrap();
-    while !terminal.screen().text().contains("watched-Windows_NT") {
+    while !terminal.screen().text().contains(printed) {
         match next_event(&mut watcher, "the command's output").await {
             Some(WatchEvent::Output { data }) => {
                 let _ = terminal.advance(data.as_bytes());

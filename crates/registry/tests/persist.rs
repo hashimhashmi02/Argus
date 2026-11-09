@@ -291,29 +291,60 @@ fn a_duplicate_id_in_the_file_does_not_replace_an_existing_session() {
     assert_eq!(registry.find("aaaa1111").unwrap().agent, "first");
 }
 
+/// Stop this process being able to read `path` until the guard is dropped.
+///
+/// There is no shared mechanism for this. Windows can refuse sharing on an
+/// open handle, which is how a file held by another process behaves; Unix has
+/// no equivalent, so the mode is cleared and restored afterwards. Both produce
+/// the thing under test -- a file that is there and cannot be read -- which is
+/// what the loader has to tell apart from a file that is damaged.
+#[cfg(windows)]
+fn deny_reads(path: &std::path::Path) -> impl Sized {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    // Share mode 0: nobody else may read, write or delete while this is open.
+    fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(path)
+        .unwrap()
+}
+
+#[cfg(unix)]
+fn deny_reads(path: &std::path::Path) -> impl Sized {
+    use std::os::unix::fs::PermissionsExt;
+
+    /// Puts the mode back, so the directory can still be cleaned up.
+    struct Restore(PathBuf, fs::Permissions);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, self.1.clone());
+        }
+    }
+
+    let original = fs::metadata(path).unwrap().permissions();
+    let mut denied = original.clone();
+    denied.set_mode(0o000);
+    fs::set_permissions(path, denied).unwrap();
+    Restore(path.to_path_buf(), original)
+}
+
 #[test]
 fn a_locked_file_is_an_error_not_a_quarantine() {
     // Unreadable is not unparseable. Another process holding the file open
     // exclusively says nothing about its contents, and renaming a perfectly good
     // file aside over a transient lock would lose history by a different route.
-    use std::os::windows::fs::OpenOptionsExt;
-
     let dir = scratch_dir("locked");
     let path = dir.join("state.json");
     save(&path, &StateFile::default()).unwrap();
 
-    // Share mode 0: nobody else may read, write or delete while this is open.
-    let _lock = fs::OpenOptions::new()
-        .read(true)
-        .share_mode(0)
-        .open(&path)
-        .unwrap();
+    let lock = deny_reads(&path);
 
     assert!(
         load(&path).is_err(),
         "a locked file must be reported, not quarantined"
     );
-    drop(_lock);
+    drop(lock);
 
     assert_eq!(
         files_in(&dir),

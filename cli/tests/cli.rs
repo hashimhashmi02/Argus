@@ -17,27 +17,52 @@ use tokio::sync::oneshot;
 
 const LIMIT: Duration = Duration::from_secs(20);
 
-fn cmd_exe() -> PathBuf {
+/// A shell that exists here, the arguments that make it print a prompt, and
+/// the prompt to look for.
+///
+/// These tests need idle to be detectable, which means a shell that shows
+/// something recognisable while it waits. `cmd.exe` always does. `sh` only
+/// does when it is interactive, hence `-i`; its prompt is `$ ` as a user and
+/// `# ` as root, and macOS answers `sh-3.2$ `, so the pattern matches the
+/// ending rather than the whole line.
+#[cfg(windows)]
+fn test_shell() -> (PathBuf, Vec<String>, &'static str) {
     let root = std::env::var_os("SystemRoot").expect("SystemRoot should be set on Windows");
-    PathBuf::from(root).join("System32").join("cmd.exe")
+    (
+        PathBuf::from(root).join("System32").join("cmd.exe"),
+        Vec::new(),
+        r"(?m)^[A-Za-z]:\\[^\n]*>$",
+    )
+}
+
+#[cfg(unix)]
+fn test_shell() -> (PathBuf, Vec<String>, &'static str) {
+    (
+        PathBuf::from("/bin/sh"),
+        vec!["-i".to_string()],
+        r"(?m)[$#] ?$",
+    )
 }
 
 fn shell_agent() -> Agent {
+    let shell = test_shell();
     let json = format!(
         r#"{{
           "id": "test-shell",
           "display_name": "Test Shell",
-          "launch": {{ "program": {program} }},
+          "launch": {{ "program": {program}, "args": {args} }},
           "rules": [
             {{
               "name": "cmd-prompt",
               "status": "idle",
-              "pattern": "(?m)^[A-Za-z]:\\\\[^\\n]*>$",
+              "pattern": {pattern},
               "region": {{ "last_lines": 3 }}
             }}
           ]
         }}"#,
-        program = serde_json::to_string(&cmd_exe()).unwrap(),
+        program = serde_json::to_string(&shell.0).unwrap(),
+        args = serde_json::to_string(&shell.1).unwrap(),
+        pattern = serde_json::to_string(shell.2).unwrap(),
     );
     Agent::from_json(&json, "test-shell.json").unwrap()
 }
@@ -81,6 +106,22 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+/// Whether a screen is showing a shell prompt.
+///
+/// `cmd.exe` ends its prompt with `>` and `sh` with `$`. Matching the one
+/// character keeps this independent of the rest of the prompt, which carries
+/// the working directory on Windows and nothing on Unix.
+fn shows_a_prompt(text: &str) -> bool {
+    #[cfg(windows)]
+    {
+        text.contains('>')
+    }
+    #[cfg(unix)]
+    {
+        text.contains('$')
+    }
+}
+
 /// Re-run a command until its stdout satisfies `predicate`.
 async fn poll(pipe: &str, args: &[&str], what: &str, predicate: impl Fn(&str) -> bool) -> String {
     let deadline = tokio::time::Instant::now() + LIMIT;
@@ -116,7 +157,7 @@ async fn watch_prints_json_events_until_the_session_ends() {
     let engine = start("cli-watch");
     let id = spawn(&engine.pipe).await;
     poll(&engine.pipe, &["screen", &id], "the prompt", |text| {
-        text.contains('>')
+        shows_a_prompt(text)
     })
     .await;
 
@@ -162,7 +203,7 @@ async fn spawn_screen_send_list_and_kill() {
 
     // The prompt shows up on the emulated screen.
     poll(pipe, &["screen", &id], "the prompt", |text| {
-        text.contains('>')
+        shows_a_prompt(text)
     })
     .await;
 
@@ -200,7 +241,7 @@ async fn no_enter_and_key_compose_into_one_command() {
     let pipe = &engine.pipe;
     let id = spawn(pipe).await;
     poll(pipe, &["screen", &id], "the prompt", |text| {
-        text.contains('>')
+        shows_a_prompt(text)
     })
     .await;
 
@@ -308,10 +349,19 @@ async fn no_engine_exits_3_with_a_hint() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_bare_pipe_name_is_accepted() {
-    // The pipe name without its `\\.\pipe\` prefix -- what a person types,
-    // because the prefix does not survive every shell intact.
+    // The endpoint name without the part a person would not type: the
+    // `\\.\pipe\` prefix on Windows, the directory and `.sock` suffix on Unix.
+    // Both exist because what survives being typed into a shell differs, and
+    // both have to resolve back to the same endpoint.
     let engine = start("cli-bare");
+    #[cfg(windows)]
     let bare = engine.pipe.trim_start_matches(r"\\.\pipe\");
+    #[cfg(unix)]
+    let bare = std::path::Path::new(&engine.pipe)
+        .file_stem()
+        .expect("the helper names a file")
+        .to_str()
+        .expect("ASCII");
     assert_ne!(bare, engine.pipe, "the helper should produce a full path");
 
     let output = cli(bare, &["list"]).await;
@@ -351,7 +401,7 @@ async fn agents_approve_and_deny() {
 
     let id = spawn(pipe).await;
     poll(pipe, &["screen", &id], "the prompt", |text| {
-        text.contains('>')
+        shows_a_prompt(text)
     })
     .await;
 

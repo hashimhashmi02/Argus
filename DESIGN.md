@@ -868,6 +868,9 @@ Each step is a working, runnable checkpoint — not a half-finished layer.
 | 13b | `serve_connection` over any stream, so a second transport can exist | **done** |
 | 13c | QUIC, a certificate pinned by the invite, and a secret exchanged for it | **done** |
 | 13d | `argus-cli invite`, `argus-engine --quic`, and a handshake that cannot be held open | **done** |
+| 14a | Invites minted from the window, and an `Invite` that carries no clock | **done** |
+| 14b | CI on three platforms, Linux and macOS first so the port has a target | **done** |
+| 14c | The engine, the CLI and the whole suite run on Linux and macOS | **done** |
 
 The UI is last on purpose. A UI built on an unstable protocol locks in the
 mistakes of that protocol.
@@ -876,6 +879,26 @@ Step 13 is the first step whose risk is not in the code it adds but in what it
 makes reachable, which is why the boundary (13a) ships before the transport
 (13b) rather than alongside it — see
 [Attaching from another machine](#attaching-from-another-machine).
+
+### What the port does not cover
+
+Step 14c makes the engine, the CLI and every test pass on Linux and macOS. Three
+things stay Windows-only, each for a different reason, and none of them is a
+loose end hidden by a green tick:
+
+- **The desktop app** needs a system webview. That is Tauri's problem to solve
+  per platform, not the engine's, so `argus-app` is excluded from the Linux and
+  macOS jobs and will be added when someone has run it there.
+- **The installer** is PowerShell, and **npm packaging** ships a Windows binary.
+  Both are distribution, which comes after the thing being distributed works.
+- **Agent manifests name Windows programs.** `resolve_shell` looks for `pwsh`,
+  `powershell` and `cmd`, and `manifests/shell.json` asks for `powershell.exe`.
+  So the engine builds, serves and is watched over QUIC on Linux, but
+  `argus-cli spawn shell` has nothing to spawn. Fixing it is a schema decision
+  -- whether a manifest names one program or one per platform -- and inventing
+  that schema quietly inside a port is how a format gets decided by accident.
+  The tests do not paper over it: each one picks `cmd.exe` or `/bin/sh` for the
+  platform it is on, which is exactly the choice a manifest will have to express.
 
 ### On `portable-pty` vs raw ConPTY
 

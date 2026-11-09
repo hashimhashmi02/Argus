@@ -1,13 +1,14 @@
 # Build, lint and test on every push and pull request.
 #
-# Windows is the platform Argus runs on today and its job is the gate: it must
-# pass. Linux and macOS are the platforms it is being ported to, and they are
-# here first, deliberately, so the port has something to make pass rather than
-# being declared finished on a machine nobody tested.
+# All three platforms must pass. Linux and macOS were added before the port, as
+# `continue-on-error` jobs, so the port had something to make pass rather than
+# being declared finished on a machine nobody tested. That flag is gone: it was
+# a gauge, and a job that cannot fail is a job nobody reads.
 #
-# Those two jobs are `continue-on-error` for exactly as long as the port takes.
-# A job that cannot fail is a job nobody reads, so that flag is temporary and
-# removing it is the last commit of the port -- not an afterthought.
+# What each job runs differs on purpose. Formatting is one answer everywhere, so
+# only Windows checks it. Clippy is not: `#[cfg(unix)]` code is invisible to a
+# Windows lint, and the port added a good deal of it, so every platform lints
+# its own.
 
 name: CI
 
@@ -28,7 +29,6 @@ env:
 
 jobs:
   windows:
-    name: windows (gate)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,11 +45,8 @@ jobs:
         run: cargo test --workspace
 
   unix:
-    # Named for what it is measuring rather than what it is running, because the
-    # question these jobs answer is "how far is the port".
-    name: ${{ matrix.os }} (port)
+    name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -70,8 +67,8 @@ jobs:
       # The desktop app needs a system webview, which is a separate problem
       # from the engine being portable. Excluded here and added when the port
       # reaches it.
-      - name: Build
-        run: cargo check --workspace --exclude argus-app --all-targets
+      - name: Clippy
+        run: cargo clippy --workspace --exclude argus-app --all-targets -- -D warnings
 
       - name: Tests
         run: cargo test --workspace --exclude argus-app

@@ -108,22 +108,37 @@ impl Persistence {
     }
 }
 
+/// Where the lock for a given state file lives.
+fn lock_path_for(state_path: &Path) -> io::Result<std::path::PathBuf> {
+    if let Some(dir) = state_path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut name = state_path.file_name().unwrap_or_default().to_os_string();
+    name.push(".lock");
+    Ok(state_path.with_file_name(name))
+}
+
+fn locked_error(lock_path: &Path, e: io::Error) -> io::Error {
+    io::Error::new(
+        e.kind(),
+        format!(
+            "{} is locked -- another engine is already using this state file ({e})",
+            lock_path.display()
+        ),
+    )
+}
+
 /// Open `<state>.lock` with no sharing at all.
 ///
 /// Windows enforces share modes in the kernel, so while this handle is open no
 /// other process can open the file -- and if the engine dies, the OS closes the
 /// handle and the lock goes with it. No stale lock files to clean up after a
 /// crash, which is the usual weakness of lock files.
+#[cfg(windows)]
 fn acquire_lock(state_path: &Path) -> io::Result<std::fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
 
-    if let Some(dir) = state_path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let mut name = state_path.file_name().unwrap_or_default().to_os_string();
-    name.push(".lock");
-    let lock_path = state_path.with_file_name(name);
-
+    let lock_path = lock_path_for(state_path)?;
     std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -131,15 +146,36 @@ fn acquire_lock(state_path: &Path) -> io::Result<std::fs::File> {
         .truncate(false)
         .share_mode(0)
         .open(&lock_path)
-        .map_err(|e| {
-            io::Error::new(
-                e.kind(),
-                format!(
-                    "{} is locked -- another engine is already using this state file ({e})",
-                    lock_path.display()
-                ),
-            )
-        })
+        .map_err(|e| locked_error(&lock_path, e))
+}
+
+/// Take an exclusive `flock` on `<state>.lock`.
+///
+/// Unix has no share modes, so opening the file cannot be the lock. `flock` is
+/// advisory, which is enough here because the only thing that takes this lock
+/// is another Argus doing exactly the same -- and it keeps the property that
+/// matters: the kernel releases it when the process dies, so a crashed engine
+/// leaves a lock file that is not actually locked, rather than one that locks
+/// every later engine out.
+#[cfg(unix)]
+fn acquire_lock(state_path: &Path) -> io::Result<std::fs::File> {
+    use std::os::unix::io::AsRawFd;
+
+    let lock_path = lock_path_for(state_path)?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|e| locked_error(&lock_path, e))?;
+
+    // SAFETY: a plain syscall on a descriptor this function owns and keeps
+    // alive for as long as the returned file does.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(locked_error(&lock_path, io::Error::last_os_error()));
+    }
+    Ok(file)
 }
 
 /// The record to persist for one registry entry.

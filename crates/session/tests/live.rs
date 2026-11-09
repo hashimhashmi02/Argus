@@ -25,30 +25,112 @@ use tokio::sync::broadcast::error::RecvError;
 /// test.
 const LIMIT: Duration = Duration::from_secs(20);
 
-fn cmd_exe() -> PathBuf {
+/// A shell that exists here, the arguments that make it print a prompt, and
+/// the prompt to look for.
+///
+/// These tests need idle to be detectable, which means a shell that shows
+/// something recognisable while it waits. `cmd.exe` always does. `sh` only
+/// does when it is interactive, hence `-i`; its prompt is `$ ` as a user and
+/// `# ` as root, and macOS answers `sh-3.2$ `, so the pattern matches the
+/// ending rather than the whole line.
+/// Arguments that make the shell say `what` and the session's conversation id,
+/// then stay open waiting for input.
+///
+/// `cmd /k` runs a command and keeps the shell. `sh` has no such flag, so it
+/// runs the echo and then replaces itself with an interactive shell, which
+/// leaves the same thing on screen and the same process waiting.
+#[cfg(windows)]
+fn announce_then_stay(what: &str) -> Vec<String> {
+    vec![
+        "/k".to_string(),
+        "echo".to_string(),
+        what.to_string(),
+        "{session_uuid}".to_string(),
+    ]
+}
+
+#[cfg(unix)]
+fn announce_then_stay(what: &str) -> Vec<String> {
+    vec![
+        "-c".to_string(),
+        format!("echo {what} {{session_uuid}}; exec /bin/sh -i"),
+    ]
+}
+
+/// Whether `line` ends with a shell prompt.
+///
+/// `cmd.exe` ends its prompt with `>`, `sh` with `$` as a user and `#` as
+/// root. Testing the last character keeps this clear of the rest of the
+/// prompt, which carries the working directory on Windows, the shell's own
+/// name on macOS, and nothing at all on Linux.
+fn ends_with_a_prompt(line: &str) -> bool {
+    #[cfg(windows)]
+    {
+        line.ends_with('>')
+    }
+    #[cfg(unix)]
+    {
+        line.ends_with('$') || line.ends_with('#')
+    }
+}
+
+/// Keys that make the shell print something, and the text it should print.
+///
+/// The shell has to expand the expression, so what the test looks for never
+/// appears in the typed line itself -- otherwise the echo of the keys alone
+/// would satisfy it, and the test would pass without the shell running
+/// anything. `%OS%` is cmd's; arithmetic expansion is POSIX sh's.
+#[cfg(windows)]
+fn echo_an_expansion() -> (&'static str, &'static str) {
+    ("echo watched-%OS%\r", "watched-Windows_NT")
+}
+
+#[cfg(unix)]
+fn echo_an_expansion() -> (&'static str, &'static str) {
+    ("echo watched-$((6 * 7))\r", "watched-42")
+}
+
+#[cfg(windows)]
+fn test_shell() -> (PathBuf, Vec<String>, &'static str) {
     let root = std::env::var_os("SystemRoot").expect("SystemRoot should be set on Windows");
-    PathBuf::from(root).join("System32").join("cmd.exe")
+    (
+        PathBuf::from(root).join("System32").join("cmd.exe"),
+        Vec::new(),
+        r"(?m)^[A-Za-z]:\\[^\n]*>$",
+    )
+}
+
+#[cfg(unix)]
+fn test_shell() -> (PathBuf, Vec<String>, &'static str) {
+    (
+        PathBuf::from("/bin/sh"),
+        vec!["-i".to_string()],
+        r"(?m)[$#] ?$",
+    )
 }
 
 /// A manifest for `cmd.exe` whose only rule recognises its prompt as idle.
 fn shell_agent() -> Arc<Agent> {
     // JSON needs each regex backslash doubled, so a literal `\` in the pattern
     // is `\\\\` here.
+    let shell = test_shell();
     let json = format!(
         r#"{{
           "id": "test-shell",
           "display_name": "Test Shell",
-          "launch": {{ "program": {program} }},
+          "launch": {{ "program": {program}, "args": {args} }},
           "rules": [
             {{
               "name": "cmd-prompt",
               "status": "idle",
-              "pattern": "(?m)^[A-Za-z]:\\\\[^\\n]*>$",
+              "pattern": {pattern},
               "region": {{ "last_lines": 3 }}
             }}
           ]
         }}"#,
-        program = serde_json::to_string(&cmd_exe()).unwrap(),
+        program = serde_json::to_string(&shell.0).unwrap(),
+        args = serde_json::to_string(&shell.1).unwrap(),
+        pattern = serde_json::to_string(shell.2).unwrap(),
     );
 
     Arc::new(Agent::from_json(&json, "test-shell.json").expect("test manifest should be valid"))
@@ -155,7 +237,10 @@ async fn status_is_debounced_rather_than_flipping_on_the_first_quiet_frame() {
     // As soon as the prompt is on screen, idle is being debounced but not yet
     // believed.
     wait_for(&mut handle, "the prompt to appear on screen", |s| {
-        s.screen.text().contains('>')
+        s.screen
+            .text()
+            .lines()
+            .any(|l| ends_with_a_prompt(l.trim_end()))
     })
     .await;
 
@@ -333,10 +418,11 @@ async fn a_watcher_rebuilds_the_exact_screen_from_its_repaint_and_stream() {
     let _ = copy.advance(repaint.data.as_bytes());
     assert_eq!(copy.screen(), handle.snapshot().screen, "the repaint alone");
 
-    // `%OS%` expands, so the output differs from the typed command and can only
-    // have come from the shell, not from its echo of what was typed.
-    assert!(handle.send_text("echo watched-%OS%\r").await);
-    while !copy.screen().text().contains("watched-Windows_NT") {
+    // The expression expands, so the output differs from the typed command and
+    // can only have come from the shell, not from its echo of what was typed.
+    let (keys, printed) = echo_an_expansion();
+    assert!(handle.send_text(keys).await);
+    while !copy.screen().text().contains(printed) {
         match next_item(&mut stream, "the command's output").await {
             Ok(StreamItem::Output(text)) => {
                 let _ = copy.advance(text.as_bytes());
@@ -347,7 +433,7 @@ async fn a_watcher_rebuilds_the_exact_screen_from_its_repaint_and_stream() {
 
     // Once the shell is quiet again, the copy must have caught up completely.
     wait_for(&mut handle, "the prompt after the command", |s| {
-        s.status == Status::Idle && s.screen.text().contains("watched-Windows_NT")
+        s.status == Status::Idle && s.screen.text().contains(printed)
     })
     .await;
     while let Ok(Ok(StreamItem::Output(text))) =
@@ -415,18 +501,21 @@ async fn a_finished_session_closes_its_stream_and_cannot_be_watched() {
 /// A `cmd.exe` that says which way it was started, and with which
 /// conversation id.
 fn resumable_agent() -> Arc<Agent> {
+    let shell = test_shell();
     let json = format!(
         r#"{{
           "id": "test-resumable",
           "display_name": "Test Resumable",
           "launch": {{
             "program": {program},
-            "new_session_args": ["/k", "echo", "new", "{{session_uuid}}"]
+            "new_session_args": {new_args}
           }},
-          "resume": {{ "args": ["/k", "echo", "resumed", "{{session_uuid}}"] }},
+          "resume": {{ "args": {resume_args} }},
           "rules": [{{ "name": "any", "status": "idle", "pattern": "\\S" }}]
         }}"#,
-        program = serde_json::to_string(&cmd_exe()).unwrap(),
+        program = serde_json::to_string(&shell.0).unwrap(),
+        new_args = serde_json::to_string(&announce_then_stay("new")).unwrap(),
+        resume_args = serde_json::to_string(&announce_then_stay("resumed")).unwrap(),
     );
     Arc::new(Agent::from_json(&json, "test-resumable.json").expect("test manifest should be valid"))
 }
