@@ -14,7 +14,6 @@ use argus_protocol::{
     WatchEvent,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::windows::named_pipe::ClientOptions;
 use tokio::sync::{Notify, mpsc, oneshot};
 
 /// Answers `List` with one fake session, echoes ids back for `ReadScreen`, and
@@ -156,10 +155,29 @@ async fn an_engine_error_arrives_as_a_typed_rpc_error() {
 
 /// Write one raw frame and read one raw response, bypassing `Client`, so tests
 /// can send things a well-behaved client never would.
-async fn raw_exchange(
-    pipe: &mut tokio::net::windows::named_pipe::NamedPipeClient,
-    payload: &[u8],
-) -> Response {
+/// A connection opened without going through `Client`.
+///
+/// These tests send frames `Client` would never produce -- a wrong version, a
+/// truncated header, a length nobody should ask for -- so they have to talk to
+/// the endpoint directly, which means naming the platform's own stream type.
+#[cfg(windows)]
+type RawStream = tokio::net::windows::named_pipe::NamedPipeClient;
+#[cfg(unix)]
+type RawStream = tokio::net::UnixStream;
+
+#[cfg(windows)]
+async fn raw_connect(name: &str) -> RawStream {
+    tokio::net::windows::named_pipe::ClientOptions::new()
+        .open(name)
+        .unwrap()
+}
+
+#[cfg(unix)]
+async fn raw_connect(name: &str) -> RawStream {
+    tokio::net::UnixStream::connect(name).await.unwrap()
+}
+
+async fn raw_exchange(pipe: &mut RawStream, payload: &[u8]) -> Response {
     let mut frame = (payload.len() as u32).to_be_bytes().to_vec();
     frame.extend_from_slice(payload);
     pipe.write_all(&frame).await.unwrap();
@@ -176,7 +194,7 @@ async fn a_version_mismatch_is_refused_clearly() {
     // Two separately built binaries can disagree about the protocol even though
     // they share a crate. The engine must say so, not guess.
     let (name, _stop, _task) = start("version");
-    let mut pipe = ClientOptions::new().open(&name).unwrap();
+    let mut pipe = raw_connect(&name).await;
 
     let future_version = PROTOCOL_VERSION + 1;
     let request = format!(r#"{{"version":{future_version},"method":"list"}}"#);
@@ -193,7 +211,7 @@ async fn a_version_mismatch_is_refused_clearly() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_malformed_request_gets_an_error_and_the_connection_survives() {
     let (name, _stop, _task) = start("malformed");
-    let mut pipe = ClientOptions::new().open(&name).unwrap();
+    let mut pipe = raw_connect(&name).await;
 
     match raw_exchange(&mut pipe, b"this is not json").await {
         Response::Err(error) => assert_eq!(error.code, ErrorCode::BadRequest),
@@ -213,7 +231,7 @@ async fn an_oversized_frame_drops_that_client_but_not_the_server() {
     let (name, _stop, _task) = start("oversized");
 
     // Announce a 4 GiB frame. The server must not try to buffer it.
-    let mut hostile = ClientOptions::new().open(&name).unwrap();
+    let mut hostile = raw_connect(&name).await;
     hostile.write_all(&u32::MAX.to_be_bytes()).await.unwrap();
 
     // The server explains, then hangs up.
@@ -245,7 +263,7 @@ async fn a_client_vanishing_mid_request_does_not_hurt_the_server() {
 
     {
         // Half a header, then gone.
-        let mut pipe = ClientOptions::new().open(&name).unwrap();
+        let mut pipe = raw_connect(&name).await;
         pipe.write_all(&[0, 0]).await.unwrap();
     }
 
