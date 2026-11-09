@@ -10,14 +10,14 @@
 //! tests can drive a real engine over a real pipe without a command line in the
 //! way.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use argus_control_server::Handler;
+use argus_control_server::{Handler, Viewer};
 use argus_manifest::Agent;
 use argus_protocol::{
     AgentInfo, ErrorCode, Reply, Request, Response, RpcError, ScreenView, SessionInfo, WatchEvent,
@@ -69,6 +69,62 @@ pub struct Engine {
     /// Off by default. Opening a port is a decision the person running the
     /// engine makes, not something that happens because a feature exists.
     quic: Option<Arc<argus_control_server::QuicListener>>,
+    /// How many people are watching each session from elsewhere, keyed by
+    /// session id. Absent means none; no entry is kept at zero.
+    ///
+    /// Separate from the registry rather than a field on the entry, because a
+    /// watch outlives individual replies and the guard that decrements it must
+    /// not hold a borrow of the registry for as long as someone is watching.
+    remote_watchers: Arc<Mutex<HashMap<String, u32>>>,
+}
+
+/// One remote watcher, counted for as long as this value is alive.
+///
+/// [`forward_watch`] has six ways out -- the client hanging up, the session
+/// finishing, the session having already finished, a lagged stream, a closed
+/// stream, a send failing -- and the count has to come down on every one of
+/// them. A guard gets that right once instead of six times, and goes on being
+/// right when a seventh is added.
+struct RemoteWatcher {
+    counts: Arc<Mutex<HashMap<String, u32>>>,
+    id: String,
+}
+
+impl RemoteWatcher {
+    fn enter(counts: &Arc<Mutex<HashMap<String, u32>>>, id: &str) -> Self {
+        *held(counts).entry(id.to_string()).or_insert(0) += 1;
+        Self {
+            counts: Arc::clone(counts),
+            id: id.to_string(),
+        }
+    }
+}
+
+/// The watcher counts, whether or not a panic elsewhere poisoned the lock.
+///
+/// Poisoning says some other thread died mid-update, which tells us nothing
+/// about this map: the only thing ever done under this lock is add one to a
+/// number or take one away. Refusing to touch it afterwards would leave a
+/// session reading "watched" for the rest of the engine's life, which is a
+/// worse outcome than the panic that caused it. So the data is taken either
+/// way, and the same answer is given to every caller rather than one
+/// panicking, one defaulting and one guessing.
+fn held(counts: &Mutex<HashMap<String, u32>>) -> std::sync::MutexGuard<'_, HashMap<String, u32>> {
+    counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+impl Drop for RemoteWatcher {
+    fn drop(&mut self) {
+        let mut counts = held(&self.counts);
+        if let Some(count) = counts.get_mut(&self.id) {
+            *count -= 1;
+            if *count == 0 {
+                counts.remove(&self.id);
+            }
+        }
+    }
 }
 
 impl Engine {
@@ -92,6 +148,7 @@ impl Engine {
             worktree_root: std::env::temp_dir().join("argus-worktrees"),
             stop: watch::Sender::new(false),
             quic: None,
+            remote_watchers: Arc::default(),
         })
     }
 
@@ -556,11 +613,17 @@ impl Engine {
         Ok((agent, cwd))
     }
 
+    /// How many people are watching `id` from elsewhere.
+    fn remote_watchers_of(&self, id: &str) -> u32 {
+        held(&self.remote_watchers).get(id).copied().unwrap_or(0)
+    }
+
     fn info(&self, entry: &Entry<SessionHandle>) -> SessionInfo {
         SessionInfo {
             resumable: !is_running(entry) && self.how_to_resume(entry).is_ok(),
             cwd: entry.cwd.as_ref().map(|p| p.display().to_string()),
             branch: entry.branch.clone(),
+            remote_watchers: self.remote_watchers_of(&entry.id),
             ..summary(entry)
         }
     }
@@ -601,20 +664,37 @@ impl Handler for Engine {
         self.dispatch(request).await.into()
     }
 
-    async fn watch(&self, id: String) -> Result<mpsc::Receiver<WatchEvent>, RpcError> {
+    async fn watch(
+        &self,
+        id: String,
+        from: Viewer,
+    ) -> Result<mpsc::Receiver<WatchEvent>, RpcError> {
         let entry = self.find(&id)?;
         // A session from a previous run has no terminal left to follow; say so
         // rather than streaming an empty screen.
         let handle = entry.handle.clone().ok_or_else(|| self.finished(&entry))?;
+        // Counted only once the watch is certain to start, so a refused watch
+        // never shows up as someone looking.
+        let counted = match from {
+            Viewer::Remote => Some(RemoteWatcher::enter(&self.remote_watchers, &id)),
+            Viewer::Local => None,
+        };
         let (events, receiver) = mpsc::channel(WATCH_DEPTH);
-        tokio::spawn(forward_watch(handle, events));
+        tokio::spawn(forward_watch(handle, events, counted));
         Ok(receiver)
     }
 }
 
 /// Pass a session's terminal on to one watching client, until either the
 /// session ends or the client goes.
-async fn forward_watch(handle: SessionHandle, events: mpsc::Sender<WatchEvent>) {
+/// `counted` is held, not read: dropping it is what takes the session's
+/// watcher count back down, however this function returns.
+async fn forward_watch(
+    handle: SessionHandle,
+    events: mpsc::Sender<WatchEvent>,
+    counted: Option<RemoteWatcher>,
+) {
+    let _counted = counted;
     loop {
         let Some(Watch {
             repaint,
@@ -675,7 +755,9 @@ fn repaint_event(repaint: Repaint) -> WatchEvent {
     }
 }
 
-/// A session as the engine sees it, before deciding whether it can be resumed.
+/// A session as the engine sees it, before deciding whether it can be resumed
+/// and before anyone has been counted watching it: those two both need the
+/// engine, so [`Engine::info`] supplies them.
 fn summary(entry: &Entry<SessionHandle>) -> SessionInfo {
     match (&entry.handle, &entry.restored) {
         (Some(handle), _) => {
@@ -693,6 +775,7 @@ fn summary(entry: &Entry<SessionHandle>) -> SessionInfo {
                 resumable: false,
                 cwd: None,
                 branch: None,
+                remote_watchers: 0,
             }
         }
         (None, Some(record)) => SessionInfo {
@@ -712,6 +795,7 @@ fn summary(entry: &Entry<SessionHandle>) -> SessionInfo {
             resumable: false,
             cwd: None,
             branch: None,
+            remote_watchers: 0,
         },
         // The registry only ever creates entries one way or the other. If that
         // changes, an honest "done, unknown" is a better answer than a panic in
@@ -729,6 +813,7 @@ fn summary(entry: &Entry<SessionHandle>) -> SessionInfo {
             resumable: false,
             cwd: None,
             branch: None,
+            remote_watchers: 0,
         },
     }
 }

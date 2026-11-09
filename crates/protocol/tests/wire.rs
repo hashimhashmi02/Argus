@@ -28,6 +28,7 @@ fn session() -> SessionInfo {
         resumable: false,
         cwd: None,
         branch: None,
+        remote_watchers: 0,
     }
 }
 
@@ -284,6 +285,26 @@ fn a_reply_from_an_engine_predating_status_for_ms_still_parses() {
     let info: SessionInfo = serde_json::from_str(old).unwrap();
     assert_eq!(info.status_for_ms, 0);
     assert_eq!(info.status, Status::Idle);
+}
+
+#[test]
+fn remote_watchers_is_absent_until_somebody_is_watching() {
+    // Added after v1 without a version bump, which is only sound both ways
+    // round. An older client must see the bytes it always saw, so the field is
+    // omitted at zero -- the usual case, on every session in the list.
+    assert!(!json(&session()).contains("remote_watchers"));
+
+    let watched = SessionInfo {
+        remote_watchers: 2,
+        ..session()
+    };
+    assert!(json(&watched).contains(r#""remote_watchers":2"#));
+
+    // And a newer client must read an older engine, which never sends it, as
+    // nobody watching rather than as a parse failure.
+    let from_an_older_engine: SessionInfo =
+        serde_json::from_str(&json(&watched).replace(r#","remote_watchers":2"#, "")).unwrap();
+    assert_eq!(from_an_older_engine.remote_watchers, 0);
 }
 
 #[test]

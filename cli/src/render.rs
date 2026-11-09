@@ -72,14 +72,18 @@ pub fn session_table(sessions: &[SessionInfo]) -> String {
         return "no sessions -- start one with `argus-cli spawn <agent>`\n".to_string();
     }
 
-    // Only when some session has a worktree, so a table without any reads
-    // exactly as it always did.
+    // Each of these only when some session has one, so a table without any
+    // reads exactly as it always did.
     let branches = sessions.iter().any(|s| s.branch.is_some());
+    let watched = sessions.iter().any(|s| s.remote_watchers > 0);
     let mut header: Vec<String> = ["ID", "AGENT", "STATUS", "FOR", "PID", "RULE"]
         .map(String::from)
         .to_vec();
     if branches {
         header.insert(2, "BRANCH".into());
+    }
+    if watched {
+        header.push("WATCHED".into());
     }
     let rows: Vec<Vec<String>> = sessions
         .iter()
@@ -100,6 +104,13 @@ pub fn session_table(sessions: &[SessionInfo]) -> String {
             ];
             if branches {
                 row.insert(2, s.branch.clone().unwrap_or_else(|| "-".to_string()));
+            }
+            if watched {
+                row.push(if s.remote_watchers == 0 {
+                    "-".to_string()
+                } else {
+                    s.remote_watchers.to_string()
+                });
             }
             row
         })
@@ -161,6 +172,13 @@ pub fn session_line(s: &SessionInfo) -> String {
     if let (Some(branch), Some(cwd)) = (&s.branch, &s.cwd) {
         line.push_str(&format!("  on {branch} in {cwd}"));
     }
+    // Said in words rather than as a bare number, because on one line there is
+    // no column heading to tell the reader what the number counts.
+    match s.remote_watchers {
+        0 => {}
+        1 => line.push_str("  watched from elsewhere"),
+        n => line.push_str(&format!("  watched from elsewhere by {n}")),
+    }
     line
 }
 
@@ -208,6 +226,7 @@ mod tests {
             resumable: false,
             cwd: None,
             branch: None,
+            remote_watchers: 0,
         }
     }
 
@@ -293,6 +312,26 @@ mod tests {
 
         let plain = session_table(&[live]);
         assert!(!plain.contains('*') && !plain.contains("resume"), "{plain}");
+    }
+
+    #[test]
+    fn a_watched_column_appears_only_when_someone_is_watching() {
+        // Same rule as the branch column: a table nobody is watching reads
+        // exactly as it always did, so the column is not there to be ignored.
+        let quiet = info("3fa1c2d4", Status::Working, 3);
+        assert!(!session_table(std::slice::from_ref(&quiet)).contains("WATCHED"));
+        assert!(!session_line(&quiet).contains("watched"));
+
+        let mut seen = quiet.clone();
+        seen.remote_watchers = 1;
+        let table = session_table(std::slice::from_ref(&seen));
+        assert!(table.contains("WATCHED"), "{table}");
+        assert!(session_line(&seen).ends_with("watched from elsewhere"));
+
+        // A count only once there is one worth reading.
+        let mut two = quiet;
+        two.remote_watchers = 2;
+        assert!(session_line(&two).ends_with("by 2"));
     }
 
     #[test]

@@ -26,6 +26,13 @@ export interface SessionInfo {
   cwd?: string;
   /** The branch of the git worktree Argus made for it, if any. */
   branch?: string;
+  /**
+   * How many people are watching this session from somewhere else.
+   *
+   * This window's own watch is not in the number, so any value above zero
+   * means someone who redeemed an invite is looking. Absent means none.
+   */
+  remote_watchers?: number;
 }
 
 export interface ScreenView {

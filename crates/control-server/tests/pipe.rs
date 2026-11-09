@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use argus_control_server::{Client, ClientError, Handler, Server, unique_pipe_name};
+use argus_control_server::{Client, ClientError, Handler, Server, Viewer, unique_pipe_name};
 use argus_protocol::{
     ErrorCode, PROTOCOL_VERSION, Reply, Request, Response, RpcError, SessionInfo, Status,
     WatchEvent,
@@ -51,6 +51,7 @@ fn fake(id: &str) -> SessionInfo {
         resumable: false,
         cwd: None,
         branch: None,
+        remote_watchers: 0,
     }
 }
 
@@ -376,7 +377,11 @@ impl Handler for Streamer {
         Response::Ok(Reply::Done)
     }
 
-    async fn watch(&self, id: String) -> Result<mpsc::Receiver<WatchEvent>, RpcError> {
+    async fn watch(
+        &self,
+        id: String,
+        _from: Viewer,
+    ) -> Result<mpsc::Receiver<WatchEvent>, RpcError> {
         if id.starts_with("missing") {
             return Err(RpcError::new(
                 ErrorCode::UnknownSession,

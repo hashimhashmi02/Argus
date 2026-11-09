@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use argus_control_server::{Client, ClientError, Server, Watcher, unique_pipe_name};
+use argus_control_server::{Capability, Client, ClientError, Server, Watcher, unique_pipe_name};
 use argus_engine::Engine;
 use argus_manifest::Agent;
 use argus_protocol::{ErrorCode, Reply, Request, ScreenView, SessionInfo, Status, WatchEvent};
@@ -125,7 +125,38 @@ fn shell_agent() -> Agent {
 /// A running engine on a private pipe, stopped when the guard drops.
 struct Running {
     pipe: String,
+    /// Kept so a test can put a second, restricted endpoint on the same engine.
+    engine: Arc<Engine>,
     _stop: oneshot::Sender<()>,
+    /// One per endpoint made by [`Running::invited`], so they stop with it.
+    _invited: Vec<oneshot::Sender<()>>,
+}
+
+impl Running {
+    /// A second endpoint onto the same engine, permitted to watch `id` and
+    /// nothing else.
+    ///
+    /// That is exactly what redeeming an invite grants, so a watch arriving
+    /// here is a remote one as far as the engine is concerned -- without the
+    /// test having to stand up QUIC, which is a transport question and is
+    /// tested as one in `argus-control-server`.
+    fn invited(&mut self, id: &str) -> String {
+        let pipe = unique_pipe_name("invited");
+        let server = Server::bind(&pipe)
+            .unwrap()
+            .with_capability(Capability::WatchSession { id: id.to_string() });
+        let (stop, stopped) = oneshot::channel::<()>();
+        let engine = Arc::clone(&self.engine);
+        tokio::spawn(async move {
+            let _ = server
+                .run(engine, async {
+                    let _ = stopped.await;
+                })
+                .await;
+        });
+        self._invited.push(stop);
+        pipe
+    }
 }
 
 fn start(label: &str) -> Running {
@@ -134,15 +165,21 @@ fn start(label: &str) -> Running {
     let server = Server::bind(&pipe).unwrap();
     let (stop, stopped) = oneshot::channel::<()>();
 
+    let serving = Arc::clone(&engine);
     tokio::spawn(async move {
         let _ = server
-            .run(engine, async {
+            .run(serving, async {
                 let _ = stopped.await;
             })
             .await;
     });
 
-    Running { pipe, _stop: stop }
+    Running {
+        pipe,
+        engine,
+        _stop: stop,
+        _invited: Vec::new(),
+    }
 }
 
 async fn spawn_shell(client: &mut Client) -> SessionInfo {
@@ -522,6 +559,77 @@ async fn respond_sends_the_keys_from_the_agents_own_manifest() {
     );
 
     client.call(Request::Kill { id }).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_says_how_many_people_are_watching_it_from_elsewhere() {
+    let mut engine = start("watch-count");
+    let mut client = Client::connect(&engine.pipe).await.unwrap();
+    let session = spawn_shell(&mut client).await;
+    poll_until(&mut client, &session.id, "the prompt", |v| {
+        v.session.status == Status::Idle
+    })
+    .await;
+
+    // The window watches the session it is showing. That must not count: the
+    // number answers "is anyone *else* looking at this", and one that was
+    // always at least one would answer nothing.
+    let mut mine = Client::connect(&engine.pipe)
+        .await
+        .unwrap()
+        .watch(&session.id)
+        .await
+        .unwrap();
+    next_event(&mut mine, "my own repaint").await;
+    assert_eq!(
+        screen(&mut client, &session.id)
+            .await
+            .session
+            .remote_watchers,
+        0,
+        "watching from this machine is not someone else watching"
+    );
+
+    let invited = engine.invited(&session.id);
+    let mut theirs = Client::connect(&invited)
+        .await
+        .unwrap()
+        .watch(&session.id)
+        .await
+        .unwrap();
+    next_event(&mut theirs, "their repaint").await;
+    poll_until(
+        &mut client,
+        &session.id,
+        "one watcher from elsewhere",
+        |v| v.session.remote_watchers == 1,
+    )
+    .await;
+
+    // An invite is for one person, but the engine counts rather than latches,
+    // so two of them read as two.
+    let mut also = Client::connect(&invited)
+        .await
+        .unwrap()
+        .watch(&session.id)
+        .await
+        .unwrap();
+    next_event(&mut also, "the second repaint").await;
+    poll_until(&mut client, &session.id, "two watchers", |v| {
+        v.session.remote_watchers == 2
+    })
+    .await;
+
+    // And it comes back down when they go, which is the half that a counter
+    // incremented in the easy place gets wrong.
+    drop(theirs);
+    drop(also);
+    poll_until(&mut client, &session.id, "nobody watching", |v| {
+        v.session.remote_watchers == 0
+    })
+    .await;
+
+    client.call(Request::Kill { id: session.id }).await.unwrap();
 }
 
 /// The next watch event, failing the test rather than hanging.

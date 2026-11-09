@@ -284,6 +284,12 @@ button {
   color: var(--bright-magenta);
 }
 
+/* Someone else is looking: a fact about the session, not a call to act, so it
+   takes the palette's blue. Yellow is reserved for a session needing you. */
+.seg-watched {
+  color: var(--cyan);
+}
+
 .is-working .seg-status {
   color: var(--cyan);
 }

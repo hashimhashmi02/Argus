@@ -40,7 +40,7 @@ mod invite;
 mod quic;
 mod server;
 
-pub use capability::Capability;
+pub use capability::{Capability, Viewer};
 pub use client::{Client, ClientError, ENTER_GAP, Watcher};
 pub use invite::{INVITE_LIFETIME, Invite, InviteError};
 pub use quic::{QuicError, QuicListener, connect as quic_connect};

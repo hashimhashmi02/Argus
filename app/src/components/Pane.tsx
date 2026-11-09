@@ -1,6 +1,6 @@
 import type { MutableRefObject } from "react";
 import { api, type SessionInfo } from "../api";
-import { paneStatus, statusClass, statusLabel } from "../format";
+import { paneStatus, statusClass, statusLabel, watchedBy } from "../format";
 import { blocked, keepFocus } from "../layout";
 import { usePolling } from "../usePolling";
 import { Screen } from "./Screen";
@@ -51,6 +51,7 @@ export function Pane(props: Props) {
   const { session: s, index, current, zoomed, answered } = props;
   const dead = s.status === "done";
   const bell = blocked(s);
+  const watched = watchedBy(s);
 
   const classes = [
     "pane",
@@ -64,7 +65,7 @@ export function Pane(props: Props) {
     <section
       className={classes.join(" ")}
       style={{ viewTransitionName: `pane-${s.id}` }}
-      aria-label={`${index} ${s.agent}: ${statusLabel(s)}`}
+      aria-label={`${index} ${s.agent}: ${statusLabel(s)}${watched ? `, ${watched}` : ""}`}
       aria-current={current || undefined}
       onClick={props.onSelect}
       onDoubleClick={props.onToggleZoom}
@@ -83,6 +84,17 @@ export function Pane(props: Props) {
             <span className="tick" />
             <span className="seg seg-branch" title={s.cwd}>
               {s.branch}
+            </span>
+          </>
+        )}
+        {watched && (
+          <>
+            <span className="tick" />
+            <span
+              className="seg seg-watched"
+              title="someone is watching this session from elsewhere"
+            >
+              {watched}
             </span>
           </>
         )}
