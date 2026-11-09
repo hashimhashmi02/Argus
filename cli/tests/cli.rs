@@ -106,6 +106,22 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+/// Whether a screen is showing a shell prompt.
+///
+/// `cmd.exe` ends its prompt with `>` and `sh` with `$`. Matching the one
+/// character keeps this independent of the rest of the prompt, which carries
+/// the working directory on Windows and nothing on Unix.
+fn shows_a_prompt(text: &str) -> bool {
+    #[cfg(windows)]
+    {
+        text.contains('>')
+    }
+    #[cfg(unix)]
+    {
+        text.contains('$')
+    }
+}
+
 /// Re-run a command until its stdout satisfies `predicate`.
 async fn poll(pipe: &str, args: &[&str], what: &str, predicate: impl Fn(&str) -> bool) -> String {
     let deadline = tokio::time::Instant::now() + LIMIT;
@@ -141,7 +157,7 @@ async fn watch_prints_json_events_until_the_session_ends() {
     let engine = start("cli-watch");
     let id = spawn(&engine.pipe).await;
     poll(&engine.pipe, &["screen", &id], "the prompt", |text| {
-        text.contains('>')
+        shows_a_prompt(text)
     })
     .await;
 
@@ -187,7 +203,7 @@ async fn spawn_screen_send_list_and_kill() {
 
     // The prompt shows up on the emulated screen.
     poll(pipe, &["screen", &id], "the prompt", |text| {
-        text.contains('>')
+        shows_a_prompt(text)
     })
     .await;
 
@@ -225,7 +241,7 @@ async fn no_enter_and_key_compose_into_one_command() {
     let pipe = &engine.pipe;
     let id = spawn(pipe).await;
     poll(pipe, &["screen", &id], "the prompt", |text| {
-        text.contains('>')
+        shows_a_prompt(text)
     })
     .await;
 
@@ -333,10 +349,19 @@ async fn no_engine_exits_3_with_a_hint() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_bare_pipe_name_is_accepted() {
-    // The pipe name without its `\\.\pipe\` prefix -- what a person types,
-    // because the prefix does not survive every shell intact.
+    // The endpoint name without the part a person would not type: the
+    // `\\.\pipe\` prefix on Windows, the directory and `.sock` suffix on Unix.
+    // Both exist because what survives being typed into a shell differs, and
+    // both have to resolve back to the same endpoint.
     let engine = start("cli-bare");
+    #[cfg(windows)]
     let bare = engine.pipe.trim_start_matches(r"\\.\pipe\");
+    #[cfg(unix)]
+    let bare = std::path::Path::new(&engine.pipe)
+        .file_stem()
+        .expect("the helper names a file")
+        .to_str()
+        .expect("ASCII");
     assert_ne!(bare, engine.pipe, "the helper should produce a full path");
 
     let output = cli(bare, &["list"]).await;
@@ -376,7 +401,7 @@ async fn agents_approve_and_deny() {
 
     let id = spawn(pipe).await;
     poll(pipe, &["screen", &id], "the prompt", |text| {
-        text.contains('>')
+        shows_a_prompt(text)
     })
     .await;
 

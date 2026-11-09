@@ -58,6 +58,19 @@ pub fn default_pipe_name() -> String {
     format!(r"\\.\pipe\argus-{}", sanitise(&user))
 }
 
+/// Where sockets live: the user's own runtime directory when the system
+/// provides one, the temp directory otherwise.
+///
+/// One function rather than three copies, because [`pipe_path`] resolving a
+/// bare name somewhere other than [`unique_pipe_name`] binds would make a
+/// bare name mean a different endpoint than the full one it came from.
+#[cfg(unix)]
+fn runtime_dir() -> std::path::PathBuf {
+    std::env::var("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir())
+}
+
 /// The socket the engine listens on by default: one per user.
 ///
 /// `XDG_RUNTIME_DIR` when the system provides it, because that directory is
@@ -69,10 +82,8 @@ pub fn default_pipe_name() -> String {
 #[cfg(unix)]
 pub fn default_pipe_name() -> String {
     let user = std::env::var("USER").unwrap_or_else(|_| "default".to_string());
-    let dir = std::env::var("XDG_RUNTIME_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::env::temp_dir());
-    dir.join(format!("argus-{}.sock", sanitise(&user)))
+    runtime_dir()
+        .join(format!("argus-{}.sock", sanitise(&user)))
         .to_string_lossy()
         .into_owned()
 }
@@ -111,10 +122,8 @@ pub fn pipe_path(name: &str) -> String {
     if name.contains('/') {
         return name.to_string();
     }
-    let dir = std::env::var("XDG_RUNTIME_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::env::temp_dir());
-    dir.join(format!("{}.sock", sanitise(name)))
+    runtime_dir()
+        .join(format!("{}.sock", sanitise(name)))
         .to_string_lossy()
         .into_owned()
 }
@@ -129,12 +138,13 @@ pub fn unique_pipe_name(label: &str) -> String {
     {
         format!(r"\\.\pipe\{leaf}")
     }
-    // A socket is a real file, so tests put theirs in the temp directory
-    // rather than a namespace that does not exist here. Each name is unique,
-    // so parallel test binaries still never collide.
+    // A socket is a real file, so tests put theirs where `pipe_path` would
+    // resolve a bare name -- otherwise a test that strips the directory off
+    // this name would be asking for a different endpoint. Each name is
+    // unique, so parallel test binaries still never collide.
     #[cfg(unix)]
     {
-        std::env::temp_dir()
+        runtime_dir()
             .join(format!("{leaf}.sock"))
             .to_string_lossy()
             .into_owned()
