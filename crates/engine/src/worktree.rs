@@ -75,7 +75,17 @@ pub(crate) async fn prepare(dir: &Path, branch: &str, root: &Path) -> Result<Pat
         vec!["worktree", "add", "-b", branch, &target]
     };
     git(&top, &args).await?;
-    Ok(path)
+
+    // Ask git where it put it rather than trusting the path we asked for.
+    // Those can differ: on a machine whose temp directory has an 8.3 short
+    // name -- `RUNNER~1` on GitHub's Windows images -- git reports the long
+    // form, and a session recorded under the short one would not match the
+    // next lookup, so a second agent on the same branch would be handed a
+    // different folder. Found exactly that way, by CI and not by review.
+    let listing = git(&top, &["worktree", "list", "--porcelain"]).await?;
+    Ok(checked_out_at(&listing, branch)
+        .map(|found| native(&found))
+        .unwrap_or(path))
 }
 
 /// Git prints `C:/src/app`. Recorded as `C:\src\app`, so the same folder is

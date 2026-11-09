@@ -1,0 +1,77 @@
+# Build, lint and test on every push and pull request.
+#
+# Windows is the platform Argus runs on today and its job is the gate: it must
+# pass. Linux and macOS are the platforms it is being ported to, and they are
+# here first, deliberately, so the port has something to make pass rather than
+# being declared finished on a machine nobody tested.
+#
+# Those two jobs are `continue-on-error` for exactly as long as the port takes.
+# A job that cannot fail is a job nobody reads, so that flag is temporary and
+# removing it is the last commit of the port -- not an afterthought.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to the same branch makes the previous run irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Backtraces on a machine nobody can attach a debugger to.
+  RUST_BACKTRACE: 1
+
+jobs:
+  windows:
+    name: windows (gate)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace
+
+  unix:
+    # Named for what it is measuring rather than what it is running, because the
+    # question these jobs answer is "how far is the port".
+    name: ${{ matrix.os }} (port)
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml asks for the MSVC target, which is meaningless
+      # here. Overriding the file keeps these runners from fetching a Windows
+      # target they cannot use.
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup override set stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The desktop app needs a system webview, which is a separate problem
+      # from the engine being portable. Excluded here and added when the port
+      # reaches it.
+      - name: Build
+        run: cargo check --workspace --exclude argus-app --all-targets
+
+      - name: Tests
+        run: cargo test --workspace --exclude argus-app
