@@ -433,7 +433,7 @@ async fn a_watcher_rebuilds_the_exact_screen_from_its_repaint_and_stream() {
 
     // Once the shell is quiet again, the copy must have caught up completely.
     wait_for(&mut handle, "the prompt after the command", |s| {
-        s.status == Status::Idle && s.screen.text().contains("watched-Windows_NT")
+        s.status == Status::Idle && s.screen.text().contains(printed)
     })
     .await;
     while let Ok(Ok(StreamItem::Output(text))) =
