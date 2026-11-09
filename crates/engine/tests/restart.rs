@@ -53,6 +53,10 @@ fn announce_then_stay(what: &str) -> Vec<String> {
     ]
 }
 
+/// Keys to type at a session that is no longer running. Nothing runs them --
+/// the point is the refusal -- so they need not name a command.
+const SOME_KEYS: &str = "anything\r";
+
 #[cfg(windows)]
 fn test_shell() -> (PathBuf, Vec<String>, &'static str) {
     let root = std::env::var_os("SystemRoot").expect("SystemRoot should be set on Windows");
@@ -378,7 +382,7 @@ async fn the_session_list_survives_a_crash() {
     match client
         .call(Request::SendText {
             id: running.clone(),
-            text: "dir\r".into(),
+            text: SOME_KEYS.into(),
         })
         .await
     {
@@ -505,7 +509,7 @@ async fn a_lost_session_is_resumed_under_its_own_id_in_its_own_folder() {
     match client
         .call(Request::SendText {
             id: resumable.clone(),
-            text: "dir\r".into(),
+            text: SOME_KEYS.into(),
         })
         .await
     {

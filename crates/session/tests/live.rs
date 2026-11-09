@@ -57,6 +57,39 @@ fn announce_then_stay(what: &str) -> Vec<String> {
     ]
 }
 
+/// Whether `line` ends with a shell prompt.
+///
+/// `cmd.exe` ends its prompt with `>`, `sh` with `$` as a user and `#` as
+/// root. Testing the last character keeps this clear of the rest of the
+/// prompt, which carries the working directory on Windows, the shell's own
+/// name on macOS, and nothing at all on Linux.
+fn ends_with_a_prompt(line: &str) -> bool {
+    #[cfg(windows)]
+    {
+        line.ends_with('>')
+    }
+    #[cfg(unix)]
+    {
+        line.ends_with('$') || line.ends_with('#')
+    }
+}
+
+/// Keys that make the shell print something, and the text it should print.
+///
+/// The shell has to expand the expression, so what the test looks for never
+/// appears in the typed line itself -- otherwise the echo of the keys alone
+/// would satisfy it, and the test would pass without the shell running
+/// anything. `%OS%` is cmd's; arithmetic expansion is POSIX sh's.
+#[cfg(windows)]
+fn echo_an_expansion() -> (&'static str, &'static str) {
+    ("echo watched-%OS%\r", "watched-Windows_NT")
+}
+
+#[cfg(unix)]
+fn echo_an_expansion() -> (&'static str, &'static str) {
+    ("echo watched-$((6 * 7))\r", "watched-42")
+}
+
 #[cfg(windows)]
 fn test_shell() -> (PathBuf, Vec<String>, &'static str) {
     let root = std::env::var_os("SystemRoot").expect("SystemRoot should be set on Windows");
@@ -204,7 +237,10 @@ async fn status_is_debounced_rather_than_flipping_on_the_first_quiet_frame() {
     // As soon as the prompt is on screen, idle is being debounced but not yet
     // believed.
     wait_for(&mut handle, "the prompt to appear on screen", |s| {
-        s.screen.text().contains('>')
+        s.screen
+            .text()
+            .lines()
+            .any(|l| ends_with_a_prompt(l.trim_end()))
     })
     .await;
 
@@ -382,10 +418,11 @@ async fn a_watcher_rebuilds_the_exact_screen_from_its_repaint_and_stream() {
     let _ = copy.advance(repaint.data.as_bytes());
     assert_eq!(copy.screen(), handle.snapshot().screen, "the repaint alone");
 
-    // `%OS%` expands, so the output differs from the typed command and can only
-    // have come from the shell, not from its echo of what was typed.
-    assert!(handle.send_text("echo watched-%OS%\r").await);
-    while !copy.screen().text().contains("watched-Windows_NT") {
+    // The expression expands, so the output differs from the typed command and
+    // can only have come from the shell, not from its echo of what was typed.
+    let (keys, printed) = echo_an_expansion();
+    assert!(handle.send_text(keys).await);
+    while !copy.screen().text().contains(printed) {
         match next_item(&mut stream, "the command's output").await {
             Ok(StreamItem::Output(text)) => {
                 let _ = copy.advance(text.as_bytes());
