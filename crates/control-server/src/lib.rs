@@ -52,12 +52,33 @@ pub use server::{Handler, Server};
 /// engine, and neither can see the other's sessions -- which the default DACL
 /// would enforce anyway, but a name collision would surface as a confusing
 /// "pipe already exists" error instead.
+#[cfg(windows)]
 pub fn default_pipe_name() -> String {
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "default".to_string());
     format!(r"\\.\pipe\argus-{}", sanitise(&user))
 }
 
+/// The socket the engine listens on by default: one per user.
+///
+/// `XDG_RUNTIME_DIR` when the system provides it, because that directory is
+/// already the user's alone and is cleaned up at logout -- which is exactly
+/// the lifetime a socket wants. Falling back to the temp directory means
+/// sharing a directory with every other user on the machine, so the name
+/// carries the user and [`Server::bind`] sets the socket's mode itself rather
+/// than trusting the directory.
+#[cfg(unix)]
+pub fn default_pipe_name() -> String {
+    let user = std::env::var("USER").unwrap_or_else(|_| "default".to_string());
+    let dir = std::env::var("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
+    dir.join(format!("argus-{}.sock", sanitise(&user)))
+        .to_string_lossy()
+        .into_owned()
+}
+
 /// The local pipe prefix: every named pipe on this machine lives under it.
+#[cfg(windows)]
 const LOCAL_PIPE_PREFIX: &str = r"\\.\pipe\";
 
 /// Turn a user-supplied pipe name into a full pipe path.
@@ -71,6 +92,7 @@ const LOCAL_PIPE_PREFIX: &str = r"\\.\pipe\";
 /// does not exist -- so `argus-cli --pipe '\\.\pipe\x' list` failed with "path
 /// not found" instead of "engine not running", depending purely on which shell
 /// ran it. A bare name has no backslashes for any shell to mangle.
+#[cfg(windows)]
 pub fn pipe_path(name: &str) -> String {
     if name.starts_with(r"\\") {
         name.to_string()
@@ -79,15 +101,44 @@ pub fn pipe_path(name: &str) -> String {
     }
 }
 
+/// Turn a user-supplied name into a socket path.
+///
+/// A bare name becomes a socket beside the default one, so `--pipe argus-test`
+/// means the same thing on both platforms: a second engine that does not
+/// disturb the first. Anything containing a separator is already a path.
+#[cfg(unix)]
+pub fn pipe_path(name: &str) -> String {
+    if name.contains('/') {
+        return name.to_string();
+    }
+    let dir = std::env::var("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
+    dir.join(format!("{}.sock", sanitise(name)))
+        .to_string_lossy()
+        .into_owned()
+}
+
 /// A unique pipe name for tests, so parallel test binaries never collide.
 pub fn unique_pipe_name(label: &str) -> String {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!(
-        r"\\.\pipe\argus-test-{}-{}-{n}",
-        sanitise(label),
-        std::process::id()
-    )
+    let leaf = format!("argus-test-{}-{}-{n}", sanitise(label), std::process::id());
+
+    #[cfg(windows)]
+    {
+        format!(r"\\.\pipe\{leaf}")
+    }
+    // A socket is a real file, so tests put theirs in the temp directory
+    // rather than a namespace that does not exist here. Each name is unique,
+    // so parallel test binaries still never collide.
+    #[cfg(unix)]
+    {
+        std::env::temp_dir()
+            .join(format!("{leaf}.sock"))
+            .to_string_lossy()
+            .into_owned()
+    }
 }
 
 /// Keep a name component to characters a pipe name will accept.
@@ -111,19 +162,37 @@ fn sanitise(component: &str) -> String {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
     #[test]
     fn a_bare_name_gets_the_local_pipe_prefix() {
         assert_eq!(pipe_path("argus-test"), r"\\.\pipe\argus-test");
     }
 
+    #[cfg(windows)]
     #[test]
     fn a_full_path_is_left_alone() {
         assert_eq!(pipe_path(r"\\.\pipe\argus-test"), r"\\.\pipe\argus-test");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_bare_name_becomes_a_socket_beside_the_default_one() {
+        let path = pipe_path("argus-test");
+        assert!(path.ends_with("argus-test.sock"), "{path}");
+        assert!(path.contains('/'), "{path}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_is_left_alone() {
+        assert_eq!(
+            pipe_path("/tmp/somewhere/argus.sock"),
+            "/tmp/somewhere/argus.sock"
+        );
+    }
+
     #[test]
     fn the_default_name_is_already_a_full_path() {
-        assert!(default_pipe_name().starts_with(LOCAL_PIPE_PREFIX));
         assert_eq!(pipe_path(&default_pipe_name()), default_pipe_name());
     }
 }

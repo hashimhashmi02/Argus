@@ -12,8 +12,19 @@ use argus_protocol::{
 use crate::Capability;
 use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
-use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+#[cfg(windows)]
+use tokio::net::windows::named_pipe::ServerOptions;
 use tokio::sync::{mpsc, oneshot};
+
+/// One accepted client, whatever carried it.
+///
+/// A named pipe instance is itself the connection, so accepting hands back the
+/// instance that was waiting. A Unix socket hands back a stream from its
+/// listener. The request loop below cares about neither.
+#[cfg(windows)]
+pub type Accepted = tokio::net::windows::named_pipe::NamedPipeServer;
+#[cfg(unix)]
+pub type Accepted = tokio::net::UnixStream;
 
 /// What a connection has to be for this module to serve requests over it.
 ///
@@ -79,7 +90,14 @@ pub trait Handler: Send + Sync + 'static {
 pub struct Server {
     name: String,
     /// The instance waiting for the next client.
-    next: NamedPipeServer,
+    ///
+    /// Windows only: a named pipe has one server object per client, so the
+    /// next one has to exist before the current is handed off. A Unix listener
+    /// is a single object that accepts repeatedly.
+    #[cfg(windows)]
+    next: Accepted,
+    #[cfg(unix)]
+    listener: tokio::net::UnixListener,
     /// What a connection accepted here is allowed to ask for.
     ///
     /// One value for the whole listener, because every client of a local pipe
@@ -89,7 +107,8 @@ pub struct Server {
 }
 
 impl Server {
-    /// Create the pipe, failing if anything already owns that name.
+    /// Create the endpoint, failing if anything already owns that name.
+    #[cfg(windows)]
     pub fn bind(name: impl Into<String>) -> io::Result<Self> {
         let name = name.into();
         let next = ServerOptions::new()
@@ -108,6 +127,82 @@ impl Server {
             next,
             capability: Capability::Full,
         })
+    }
+
+    /// Create the socket, failing if another engine is already listening.
+    ///
+    /// A Unix socket leaves its file behind when the process holding it dies,
+    /// and binding over a leftover fails with "address in use" -- so an engine
+    /// that crashed would lock every later one out. The file alone does not
+    /// say whether anyone is there, so this asks: a refused connection means
+    /// nobody is listening and the file is debris, which is safe to clear. A
+    /// connection that succeeds means a live engine owns the name, and this
+    /// one refuses to start rather than take it.
+    #[cfg(unix)]
+    pub fn bind(name: impl Into<String>) -> io::Result<Self> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let name = name.into();
+        let path = std::path::Path::new(&name);
+
+        if path.exists() {
+            match std::os::unix::net::UnixStream::connect(path) {
+                Ok(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AddrInUse,
+                        format!("another engine is already listening on {name}"),
+                    ));
+                }
+                // Nobody home. The file is what a dead engine left behind.
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+                    ) =>
+                {
+                    std::fs::remove_file(path)?;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let listener = tokio::net::UnixListener::bind(path)?;
+
+        // The Windows side gets its access control from the pipe's default
+        // DACL. A socket has none until it is given one, and this API can
+        // spawn programs as the user, so the file is made unreachable to
+        // everyone else rather than relying on the directory's mode.
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+
+        Ok(Self {
+            name,
+            listener,
+            capability: Capability::Full,
+        })
+    }
+
+    /// Wait for the next client.
+    #[cfg(windows)]
+    async fn accept(&mut self) -> io::Result<Accepted> {
+        self.next.connect().await?;
+        // Create the next instance *before* handing this one off. Between a
+        // client connecting and a new instance existing, the pipe has no
+        // listening instance at all, and any client arriving in that gap gets
+        // a "pipe not found" error even though the daemon is running fine.
+        // Making the replacement first closes the gap.
+        let replacement = ServerOptions::new()
+            .reject_remote_clients(true)
+            .create(&self.name)?;
+        Ok(std::mem::replace(&mut self.next, replacement))
+    }
+
+    #[cfg(unix)]
+    async fn accept(&mut self) -> io::Result<Accepted> {
+        let (stream, _addr) = self.listener.accept().await?;
+        Ok(stream)
     }
 
     /// Serve clients with less than full access.
@@ -134,26 +229,15 @@ impl Server {
         tokio::pin!(shutdown);
 
         loop {
-            // `connect` is asynchronous -- tokio drives ConnectNamedPipe with
-            // overlapped I/O -- so waiting for a client parks this task, not a
-            // runtime worker. That is what satisfies the "accept() must not block
-            // the async pool" rule from DESIGN.md. A synchronous
-            // ConnectNamedPipe here would hold a worker for as long as nobody
-            // connected, which on a daemon is most of its life.
-            tokio::select! {
-                connected = self.next.connect() => connected?,
+            // Accepting is asynchronous on both platforms -- tokio drives
+            // ConnectNamedPipe with overlapped I/O, and the Unix listener with
+            // the reactor -- so waiting for a client parks this task, not a
+            // runtime worker. That is what satisfies the "accept() must not
+            // block the async pool" rule from DESIGN.md.
+            let client = tokio::select! {
+                accepted = self.accept() => accepted?,
                 () = &mut shutdown => return Ok(()),
-            }
-
-            // Create the next instance *before* handing this one off. Between a
-            // client connecting and a new instance existing, the pipe has no
-            // listening instance at all, and any client arriving in that gap gets
-            // a "pipe not found" error even though the daemon is running fine.
-            // Making the replacement first closes the gap.
-            let replacement = ServerOptions::new()
-                .reject_remote_clients(true)
-                .create(&self.name)?;
-            let client = std::mem::replace(&mut self.next, replacement);
+            };
 
             tokio::spawn(serve_connection(
                 client,

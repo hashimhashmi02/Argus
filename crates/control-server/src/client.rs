@@ -8,6 +8,7 @@ use argus_protocol::{
     encode,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(windows)]
 use tokio::net::windows::named_pipe::ClientOptions;
 
 use crate::server::{Connection, Keepalive};
@@ -16,15 +17,18 @@ use crate::server::{Connection, Keepalive};
 ///
 /// Spelled as a number rather than pulled in from `windows-sys`, because two
 /// constants are not worth a dependency on a crate this size.
+#[cfg(windows)]
 const ERROR_FILE_NOT_FOUND: i32 = 2;
 
 /// `ERROR_PIPE_BUSY`: the pipe exists, but every instance is taken.
 ///
 /// Normal and transient. The server makes a new instance as soon as it accepts
 /// each client, so this only happens in the brief window while it does.
+#[cfg(windows)]
 const ERROR_PIPE_BUSY: i32 = 231;
 
 /// How long to keep retrying a busy pipe before giving up.
+#[cfg(windows)]
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The pause between typing a line and pressing Enter. See [`Client::send_line`].
@@ -41,10 +45,10 @@ pub enum ClientError {
     /// Its own variant because it is by far the most common failure, and the
     /// right message for it ("start the engine") is completely different from
     /// the right message for anything else.
-    #[error("the Argus engine is not running (no pipe at {0})")]
+    #[error("the Argus engine is not running (nothing listening at {0})")]
     NotRunning(String),
 
-    #[error("pipe I/O failed")]
+    #[error("connection I/O failed")]
     Io(#[from] io::Error),
 
     #[error("could not frame the message")]
@@ -76,6 +80,7 @@ pub struct Client {
 
 impl Client {
     /// Connect, retrying briefly if the pipe is momentarily busy.
+    #[cfg(windows)]
     pub async fn connect(name: &str) -> Result<Self, ClientError> {
         let deadline = tokio::time::Instant::now() + BUSY_TIMEOUT;
 
@@ -97,6 +102,28 @@ impl Client {
 
         // A pipe handle is the whole connection; dropping it is enough.
         Ok(Self::from_stream(Box::new(pipe), None))
+    }
+
+    /// Connect to the engine's socket.
+    ///
+    /// A Unix socket has no equivalent of a pipe being momentarily busy --
+    /// the listener's backlog absorbs that -- so there is nothing to retry.
+    /// What it does have is a file that outlives a dead engine, so a refused
+    /// connection means the same thing a missing one does: nobody is serving.
+    #[cfg(unix)]
+    pub async fn connect(name: &str) -> Result<Self, ClientError> {
+        match tokio::net::UnixStream::connect(name).await {
+            Ok(stream) => Ok(Self::from_stream(Box::new(stream), None)),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+                ) =>
+            {
+                Err(ClientError::NotRunning(name.to_string()))
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Wrap a stream that is already connected and past whatever handshake its

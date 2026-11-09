@@ -29,6 +29,10 @@ argus-session = { path = "../session" }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "process", "signal", "sync", "time"] }
 
+# Only for `flock`, which stands in for the Windows share mode on Unix.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 # To check a watched stream the way a client would: by feeding it to a terminal.
 argus-terminal-emu = { path = "../terminal-emu" }
