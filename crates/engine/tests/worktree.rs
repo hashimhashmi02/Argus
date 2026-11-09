@@ -11,25 +11,53 @@ use argus_manifest::Agent;
 use argus_protocol::{ErrorCode, Reply, Request, SessionInfo};
 use tokio::sync::oneshot;
 
-fn shell_agent() -> Agent {
+/// A shell that exists here, the arguments that make it print a prompt, and
+/// the prompt to look for.
+///
+/// These tests need idle to be detectable, which means a shell that shows
+/// something recognisable while it waits. `cmd.exe` always does. `sh` only
+/// does when it is interactive, hence `-i`; its prompt is `$ ` as a user and
+/// `# ` as root, and macOS answers `sh-3.2$ `, so the pattern matches the
+/// ending rather than the whole line.
+#[cfg(windows)]
+fn test_shell() -> (PathBuf, Vec<String>, &'static str) {
     let root = std::env::var_os("SystemRoot").expect("SystemRoot should be set on Windows");
-    let cmd = PathBuf::from(root).join("System32").join("cmd.exe");
+    (
+        PathBuf::from(root).join("System32").join("cmd.exe"),
+        Vec::new(),
+        r"(?m)^[A-Za-z]:\\[^\n]*>$",
+    )
+}
+
+#[cfg(unix)]
+fn test_shell() -> (PathBuf, Vec<String>, &'static str) {
+    (
+        PathBuf::from("/bin/sh"),
+        vec!["-i".to_string()],
+        r"(?m)[$#] ?$",
+    )
+}
+
+fn shell_agent() -> Agent {
+    let shell = test_shell();
     let json = format!(
         r#"{{
           "id": "test-shell",
           "display_name": "Test Shell",
-          "launch": {{ "program": {program} }},
+          "launch": {{ "program": {program}, "args": {args} }},
           "keys": {{ "approve": "enter", "deny": "ctrl-c" }},
           "rules": [
             {{
               "name": "cmd-prompt",
               "status": "idle",
-              "pattern": "(?m)^[A-Za-z]:\\\\[^\\n]*>$",
+              "pattern": {pattern},
               "region": {{ "last_lines": 3 }}
             }}
           ]
         }}"#,
-        program = serde_json::to_string(&cmd).unwrap(),
+        program = serde_json::to_string(&shell.0).unwrap(),
+        args = serde_json::to_string(&shell.1).unwrap(),
+        pattern = serde_json::to_string(shell.2).unwrap(),
     );
     Agent::from_json(&json, "test-shell.json").unwrap()
 }

@@ -25,30 +25,79 @@ use tokio::sync::broadcast::error::RecvError;
 /// test.
 const LIMIT: Duration = Duration::from_secs(20);
 
-fn cmd_exe() -> PathBuf {
+/// A shell that exists here, the arguments that make it print a prompt, and
+/// the prompt to look for.
+///
+/// These tests need idle to be detectable, which means a shell that shows
+/// something recognisable while it waits. `cmd.exe` always does. `sh` only
+/// does when it is interactive, hence `-i`; its prompt is `$ ` as a user and
+/// `# ` as root, and macOS answers `sh-3.2$ `, so the pattern matches the
+/// ending rather than the whole line.
+/// Arguments that make the shell say `what` and the session's conversation id,
+/// then stay open waiting for input.
+///
+/// `cmd /k` runs a command and keeps the shell. `sh` has no such flag, so it
+/// runs the echo and then replaces itself with an interactive shell, which
+/// leaves the same thing on screen and the same process waiting.
+#[cfg(windows)]
+fn announce_then_stay(what: &str) -> Vec<String> {
+    vec![
+        "/k".to_string(),
+        "echo".to_string(),
+        what.to_string(),
+        "{session_uuid}".to_string(),
+    ]
+}
+
+#[cfg(unix)]
+fn announce_then_stay(what: &str) -> Vec<String> {
+    vec![
+        "-c".to_string(),
+        format!("echo {what} {{session_uuid}}; exec /bin/sh -i"),
+    ]
+}
+
+#[cfg(windows)]
+fn test_shell() -> (PathBuf, Vec<String>, &'static str) {
     let root = std::env::var_os("SystemRoot").expect("SystemRoot should be set on Windows");
-    PathBuf::from(root).join("System32").join("cmd.exe")
+    (
+        PathBuf::from(root).join("System32").join("cmd.exe"),
+        Vec::new(),
+        r"(?m)^[A-Za-z]:\\[^\n]*>$",
+    )
+}
+
+#[cfg(unix)]
+fn test_shell() -> (PathBuf, Vec<String>, &'static str) {
+    (
+        PathBuf::from("/bin/sh"),
+        vec!["-i".to_string()],
+        r"(?m)[$#] ?$",
+    )
 }
 
 /// A manifest for `cmd.exe` whose only rule recognises its prompt as idle.
 fn shell_agent() -> Arc<Agent> {
     // JSON needs each regex backslash doubled, so a literal `\` in the pattern
     // is `\\\\` here.
+    let shell = test_shell();
     let json = format!(
         r#"{{
           "id": "test-shell",
           "display_name": "Test Shell",
-          "launch": {{ "program": {program} }},
+          "launch": {{ "program": {program}, "args": {args} }},
           "rules": [
             {{
               "name": "cmd-prompt",
               "status": "idle",
-              "pattern": "(?m)^[A-Za-z]:\\\\[^\\n]*>$",
+              "pattern": {pattern},
               "region": {{ "last_lines": 3 }}
             }}
           ]
         }}"#,
-        program = serde_json::to_string(&cmd_exe()).unwrap(),
+        program = serde_json::to_string(&shell.0).unwrap(),
+        args = serde_json::to_string(&shell.1).unwrap(),
+        pattern = serde_json::to_string(shell.2).unwrap(),
     );
 
     Arc::new(Agent::from_json(&json, "test-shell.json").expect("test manifest should be valid"))
@@ -415,18 +464,21 @@ async fn a_finished_session_closes_its_stream_and_cannot_be_watched() {
 /// A `cmd.exe` that says which way it was started, and with which
 /// conversation id.
 fn resumable_agent() -> Arc<Agent> {
+    let shell = test_shell();
     let json = format!(
         r#"{{
           "id": "test-resumable",
           "display_name": "Test Resumable",
           "launch": {{
             "program": {program},
-            "new_session_args": ["/k", "echo", "new", "{{session_uuid}}"]
+            "new_session_args": {new_args}
           }},
-          "resume": {{ "args": ["/k", "echo", "resumed", "{{session_uuid}}"] }},
+          "resume": {{ "args": {resume_args} }},
           "rules": [{{ "name": "any", "status": "idle", "pattern": "\\S" }}]
         }}"#,
-        program = serde_json::to_string(&cmd_exe()).unwrap(),
+        program = serde_json::to_string(&shell.0).unwrap(),
+        new_args = serde_json::to_string(&announce_then_stay("new")).unwrap(),
+        resume_args = serde_json::to_string(&announce_then_stay("resumed")).unwrap(),
     );
     Arc::new(Agent::from_json(&json, "test-resumable.json").expect("test manifest should be valid"))
 }
