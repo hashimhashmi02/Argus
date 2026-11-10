@@ -234,6 +234,29 @@ pub struct AgentInfo {
     pub id: String,
     /// What a person should see.
     pub display_name: String,
+    /// Whether this agent can be started on the machine the engine is on.
+    ///
+    /// False when the manifest names a program for other platforms and not
+    /// this one. Reported rather than filtered out, because an agent missing
+    /// from a list with no explanation sends someone looking at their install
+    /// when the answer is a line of JSON.
+    ///
+    /// Additive, like `SessionInfo::status_for_ms`, and defaulting the *other*
+    /// way: absent means available, so a reply from an engine that predates
+    /// this field reads as "every agent can start", which is what was true
+    /// before per-platform programs existed.
+    #[serde(default = "available_by_default", skip_serializing_if = "is_true")]
+    pub available: bool,
+}
+
+/// `serde(default)` for [`AgentInfo::available`]: see the field's own note.
+fn available_by_default() -> bool {
+    true
+}
+
+/// `skip_serializing_if` for a flag whose interesting value is false.
+fn is_true(flag: &bool) -> bool {
+    *flag
 }
 
 /// One session, summarised.

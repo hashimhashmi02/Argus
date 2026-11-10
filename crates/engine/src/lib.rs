@@ -375,6 +375,7 @@ impl Engine {
                     .map(|agent| AgentInfo {
                         id: agent.id().to_string(),
                         display_name: agent.manifest().display_name.clone(),
+                        available: agent.available_here(),
                     })
                     .collect(),
             }),
@@ -481,6 +482,24 @@ impl Engine {
                 format!("no agent `{agent_id}`; known agents: {}", known.join(", ")),
             )
         })?;
+
+        // Refused here rather than left to fail on exec, because "no such
+        // file" names the program and not the reason. The fix is a line of
+        // JSON, not a missing install, so the message says which key to add --
+        // and lists the keys the manifest does have, which is what turns a
+        // misspelt one into an obvious typo rather than a mystery.
+        if !agent.available_here() {
+            let named = agent.manifest().launch.platforms_named();
+            let os = std::env::consts::OS;
+            return Err(RpcError::new(
+                ErrorCode::BadRequest,
+                format!(
+                    "agent `{agent_id}` does not say how to start on {os}; \
+                     its manifest names a program for {} -- add `launch.on.{os}`",
+                    named.join(", ")
+                ),
+            ));
+        }
 
         // Recorded as an absolute path even when none was asked for, because
         // resuming has to happen in the same folder: an agent like Claude Code

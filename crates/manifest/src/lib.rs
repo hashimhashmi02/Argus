@@ -53,4 +53,7 @@ mod schema;
 pub use agent::{Agent, Start};
 pub use error::ManifestError;
 pub use keys::{Keys, key_bytes};
-pub use schema::{AgentManifest, Launch, Region, Resume, SESSION_UUID, ScreenRule, Timing};
+pub use schema::{
+    AgentManifest, Launch, PlatformLaunch, Region, ResolvedLaunch, Resume, SESSION_UUID,
+    ScreenRule, Timing,
+};

@@ -159,6 +159,97 @@ impl Running {
     }
 }
 
+/// An agent that names a program for one platform, and not this one.
+///
+/// `"on"` with a single key for the platform the tests are *not* on, so the
+/// same source says "startable elsewhere" whichever machine runs it.
+fn agent_from_elsewhere() -> Agent {
+    let elsewhere = if cfg!(windows) { "linux" } else { "windows" };
+    let json = format!(
+        r#"{{
+          "id": "test-elsewhere",
+          "display_name": "Test Elsewhere",
+          "launch": {{ "on": {{ "{elsewhere}": {{ "program": "nowhere-in-particular" }} }} }},
+          "rules": [{{ "name": "busy", "status": "working", "pattern": "x" }}]
+        }}"#
+    );
+    Agent::from_json(&json, "test-elsewhere.json").unwrap()
+}
+
+/// An engine holding the shell plus an agent that cannot start here.
+fn start_with_an_agent_from_elsewhere(label: &str) -> Running {
+    let pipe = unique_pipe_name(label);
+    let engine = Arc::new(Engine::new([shell_agent(), agent_from_elsewhere()]).unwrap());
+    let server = Server::bind(&pipe).unwrap();
+    let (stop, stopped) = oneshot::channel::<()>();
+
+    let serving = Arc::clone(&engine);
+    tokio::spawn(async move {
+        let _ = server
+            .run(serving, async {
+                let _ = stopped.await;
+            })
+            .await;
+    });
+
+    Running {
+        pipe,
+        engine,
+        _stop: stop,
+        _invited: Vec::new(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_that_cannot_start_here_is_listed_and_refused_by_name() {
+    let engine = start_with_an_agent_from_elsewhere("elsewhere");
+    let mut client = Client::connect(&engine.pipe).await.unwrap();
+
+    // Listed, not hidden. An agent missing from the list with no explanation
+    // sends someone looking at their install when the answer is a line of
+    // JSON, so the engine says it is there and says it will not start.
+    let agents = match client.call(Request::Agents).await.unwrap() {
+        Reply::Agents { agents } => agents,
+        other => panic!("expected agents, got {other:?}"),
+    };
+    let elsewhere = agents
+        .iter()
+        .find(|a| a.id == "test-elsewhere")
+        .expect("the agent should be listed");
+    assert!(!elsewhere.available);
+    assert!(
+        agents
+            .iter()
+            .find(|a| a.id == "test-shell")
+            .unwrap()
+            .available,
+        "the shell runs on every platform the tests do"
+    );
+
+    // And refused before exec, so the message is the reason rather than "no
+    // such file". It names the key to add and the keys that are there, which
+    // is what makes a misspelt one obvious.
+    let error = match client
+        .call(Request::Spawn {
+            agent: "test-elsewhere".into(),
+            cwd: None,
+            cols: None,
+            rows: None,
+            worktree: None,
+        })
+        .await
+    {
+        Err(ClientError::Rpc(error)) => error,
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+    assert_eq!(error.code, ErrorCode::BadRequest);
+    assert!(
+        error.message.contains(std::env::consts::OS) && error.message.contains("launch.on"),
+        "{}",
+        error.message
+    );
+}
+
 fn start(label: &str) -> Running {
     let pipe = unique_pipe_name(label);
     let engine = Arc::new(Engine::new([shell_agent()]).unwrap());
@@ -470,6 +561,58 @@ fn the_shipped_manifests_load_into_an_engine() {
     let ids: Vec<&str> = engine.agent_ids().collect();
     assert!(ids.contains(&"claude-code"), "got {ids:?}");
     assert!(ids.contains(&"shell"), "got {ids:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_shipped_shell_actually_starts_on_this_platform() {
+    // The claim step 15 exists to make, tested rather than asserted. Loading
+    // `shell.json` only proves it parses; this proves the program it names for
+    // *this* platform is really there, and that one of its rules recognises
+    // that shell's prompt. On Windows that is `powershell.exe` and the
+    // PowerShell rule; on Linux `/bin/sh` and the `sh` rule; on macOS
+    // `/bin/zsh`. Nothing else in the suite would notice if a path were wrong,
+    // because every other test brings its own shell.
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
+    let engine = Arc::new(Engine::load_manifest_dir(&dir).unwrap());
+    let pipe = unique_pipe_name("shipped-shell");
+    let server = Server::bind(&pipe).unwrap();
+    let (_stop, stopped) = oneshot::channel::<()>();
+    tokio::spawn(async move {
+        let _ = server
+            .run(engine, async {
+                let _ = stopped.await;
+            })
+            .await;
+    });
+
+    let mut client = Client::connect(&pipe).await.unwrap();
+    let session = match client
+        .call(Request::Spawn {
+            agent: "shell".into(),
+            cwd: None,
+            cols: None,
+            rows: None,
+            worktree: None,
+        })
+        .await
+    {
+        Ok(Reply::Session { session }) => session,
+        other => panic!(
+            "the shipped shell should start on {}: {other:?}",
+            std::env::consts::OS
+        ),
+    };
+
+    // Reaching idle means a rule matched the prompt the shell actually drew,
+    // which is the other half of naming the right program.
+    poll_until(
+        &mut client,
+        &session.id,
+        "the shipped shell's prompt",
+        |v| v.session.status == Status::Idle,
+    )
+    .await;
+    client.call(Request::Kill { id: session.id }).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]

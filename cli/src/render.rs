@@ -150,9 +150,38 @@ pub fn agent_table(agents: &[AgentInfo]) -> String {
         .chain(std::iter::once("AGENT".len()))
         .max()
         .unwrap_or(0);
-    let mut out = format!("{:<width$}  NAME\n", "AGENT");
+    // A third column only when there is something to say in it, so a machine
+    // where every agent runs reads exactly as it always did.
+    let elsewhere = agents.iter().any(|a| !a.available);
+    let name_width = agents
+        .iter()
+        .map(|a| a.display_name.chars().count())
+        .chain(std::iter::once("NAME".len()))
+        .max()
+        .unwrap_or(0);
+
+    let mut out = if elsewhere {
+        format!("{:<width$}  {:<name_width$}  WHERE\n", "AGENT", "NAME")
+    } else {
+        format!("{:<width$}  NAME\n", "AGENT")
+    };
     for agent in agents {
-        out.push_str(&format!("{:<width$}  {}\n", agent.id, agent.display_name));
+        if elsewhere {
+            // Named for the platform rather than left as a blank, because
+            // "this one will not start here" is the only reason to print the
+            // column at all.
+            let where_ = if agent.available {
+                "here".to_string()
+            } else {
+                format!("not on {}", std::env::consts::OS)
+            };
+            out.push_str(&format!(
+                "{:<width$}  {:<name_width$}  {where_}\n",
+                agent.id, agent.display_name
+            ));
+        } else {
+            out.push_str(&format!("{:<width$}  {}\n", agent.id, agent.display_name));
+        }
     }
     out
 }
@@ -228,6 +257,49 @@ mod tests {
             branch: None,
             remote_watchers: 0,
         }
+    }
+
+    fn agent(id: &str, available: bool) -> AgentInfo {
+        AgentInfo {
+            id: id.into(),
+            display_name: "Shell".into(),
+            available,
+        }
+    }
+
+    #[test]
+    fn a_where_column_appears_only_when_an_agent_cannot_start_here() {
+        // Same rule as the session table's BRANCH and WATCHED columns: a
+        // machine where every agent runs reads exactly as it always did.
+        let all_here = [agent("shell", true), agent("claude-code", true)];
+        let table = agent_table(&all_here);
+        assert!(!table.contains("WHERE"), "{table}");
+
+        let one_elsewhere = [agent("shell", true), agent("windows-only", false)];
+        let table = agent_table(&one_elsewhere);
+        assert!(table.contains("WHERE"), "{table}");
+        // Named for the platform, because "will not start here" is the only
+        // reason to print the column at all.
+        assert!(
+            table.contains(&format!("not on {}", std::env::consts::OS)),
+            "{table}"
+        );
+        // And the column still lines up once it is there.
+        let widths: Vec<usize> = table
+            .lines()
+            .map(|line| {
+                line.find("not on")
+                    .or_else(|| line.find("WHERE"))
+                    .unwrap_or(0)
+            })
+            .filter(|at| *at > 0)
+            .collect();
+        assert_eq!(widths.len(), 2, "a header and one unavailable agent");
+        assert_eq!(
+            widths[0], widths[1],
+            "the column should be aligned:
+{table}"
+        );
     }
 
     #[test]

@@ -16,11 +16,78 @@ duplicate rule name fails CI rather than a session.
 | `display_name` | What the UI shows. |
 | `launch.program` / `launch.args` | How to start it, fresh or resumed. |
 | `launch.new_session_args` | Appended to `launch.args` for a fresh session only. |
+| `launch.on.<platform>` | Per-platform overrides of the three fields above. See below. |
 | `resume.args` | Appended to `launch.args`, in place of `new_session_args`, to reattach to previous work. Omit if the CLI cannot resume. |
 | `env_scrub_prefixes` | Environment variables to strip before spawning, matched by prefix, case-insensitively. |
 | `keys.approve` / `keys.deny` | What to send to answer a prompt. |
 | `timing.idle_debounce_ms` | Override how long an idle screen must persist before the session is called idle. |
 | `rules` | Screen-match rules, below. |
+
+### Platforms
+
+Most agents are one program with one name on every machine, so most manifests
+say it once and leave `launch.on` out:
+
+```json
+"launch": { "program": "claude" }
+```
+
+Where it differs, `launch.on` holds one entry per platform, keyed by `windows`,
+`macos`, `linux` — Rust's [`std::env::consts::OS`] values — or `unix`, which
+answers for everything that is not Windows. The more specific key wins, and
+each field is taken separately, so an entry that only renames the program does
+not have to restate its arguments:
+
+```json
+"launch": {
+  "on": {
+    "windows": { "program": "powershell.exe", "args": ["-NoLogo"] },
+    "macos": { "program": "/bin/zsh", "args": ["-i"] },
+    "unix": { "program": "/bin/sh", "args": ["-i"] }
+  }
+}
+```
+
+Argument lists replace rather than merge: order carries meaning on a command
+line, and merging could add but never remove. `"args": []` is therefore a real
+answer — "no arguments here" — and not the same as leaving it out.
+
+`launch.program` is optional, so a manifest can name programs only under `on`.
+An agent with no program for the platform it finds itself on is **listed and
+refused**, not hidden: it appears in `argus-cli agents` under a `WHERE` column
+and struck through in the window's agent picker, and `spawn` says which key to
+add. An agent hidden with no explanation sends you looking at your install
+when the answer is a line of JSON.
+
+A manifest that names no program anywhere is rejected at load. A misspelt key —
+`windwos` — is not, because refusing unknown keys would refuse a manifest
+written for a platform a newer Argus runs on; it shows up as an agent that
+starts nowhere, and the spawn error prints the keys the manifest does have next
+to the one it wanted.
+
+A `rule` may name platforms the same way, with `only_on`:
+
+```json
+{ "name": "sh-prompt", "status": "idle", "pattern": "[$#%]\\s*$", "only_on": ["unix"] }
+```
+
+Rules are a priority-ordered list where one that does not match costs nothing,
+so a manifest serving several shells could *mostly* just carry a rule for each.
+What forces `only_on` is that the prompts are not equally distinctive. `zsh`
+draws `host dir %`, so a rule that catches a real `zsh` prompt has to be loose
+about everything before the sigil — which comes down to "the line ends with
+`%`". Live on Windows, that would read output ending in `45%` as a prompt and
+call a busy session idle.
+
+**At least one rule must be unscoped.** A platform with no applicable rule
+could never report a status, and it would fail silently: sessions that never
+leave `working`. The catch-all rule a manifest needs anyway is exactly the one
+to leave unscoped, and a manifest that scopes every rule is rejected at load.
+
+Every pattern is compiled whether or not this machine will use it, so a typo in
+a Windows-only rule fails to load on Linux too, rather than lying dormant.
+
+[`std::env::consts::OS`]: https://doc.rust-lang.org/std/env/consts/constant.OS.html
 
 ### Resuming
 

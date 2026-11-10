@@ -1,5 +1,6 @@
 //! The on-disk shape of an agent definition.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use argus_reducer::Status;
@@ -54,7 +55,15 @@ pub struct AgentManifest {
 /// How to start the agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Launch {
-    pub program: String,
+    /// What to run, on any platform that `on` does not answer.
+    ///
+    /// Optional, because an agent may exist only on some platforms: a manifest
+    /// that names programs under `on` and nothing here can start on exactly
+    /// the platforms it lists and says so plainly everywhere else. Most agents
+    /// are one program with one name, so most manifests fill this in and leave
+    /// `on` out entirely.
+    #[serde(default)]
+    pub program: Option<String>,
 
     /// Arguments for every start, fresh or resumed.
     #[serde(default)]
@@ -68,6 +77,138 @@ pub struct Launch {
     /// again on the way back in, where `--resume` already says it.
     #[serde(default)]
     pub new_session_args: Vec<String>,
+
+    /// Per-platform answers, each overriding the fields above.
+    ///
+    /// Keyed by [`std::env::consts::OS`] -- `windows`, `macos`, `linux` -- plus
+    /// `unix`, which answers for every platform that is not Windows. A key no
+    /// build has heard of is ignored rather than rejected, like any other
+    /// unknown part of a manifest: these files are copied between machines and
+    /// outlive the version that wrote them.
+    #[serde(default)]
+    pub on: BTreeMap<String, PlatformLaunch>,
+}
+
+/// One platform's answer, as far as it differs from [`Launch`].
+///
+/// Every field is optional and each is consulted separately, so a platform that
+/// only changes the program's name does not have to restate its arguments.
+/// Argument lists replace rather than merge: order carries meaning on a command
+/// line, and a merge could add but never remove.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PlatformLaunch {
+    #[serde(default)]
+    pub program: Option<String>,
+    #[serde(default)]
+    pub args: Option<Vec<String>>,
+    #[serde(default)]
+    pub new_session_args: Option<Vec<String>>,
+}
+
+/// What one platform actually runs, after [`Launch::resolve_for`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedLaunch {
+    /// `None` when nothing names a program for this platform, which is how a
+    /// manifest says "not here" without saying it twice.
+    pub program: Option<String>,
+    pub args: Vec<String>,
+    pub new_session_args: Vec<String>,
+}
+
+impl Launch {
+    /// What `os` runs, where `os` is an [`std::env::consts::OS`] value.
+    ///
+    /// Takes the platform as an argument rather than reading it, so the table
+    /// can be tested for every platform from whichever one the tests run on --
+    /// which is the whole difficulty this schema exists to address.
+    pub fn resolve_for(&self, os: &str) -> ResolvedLaunch {
+        // Most specific first. `unix` is only consulted off Windows, so a
+        // manifest cannot accidentally hand a Windows machine a `/bin` path.
+        let keys: &[&str] = if os == "windows" {
+            &["windows"]
+        } else {
+            &["", "unix"]
+        };
+        let platforms = keys
+            .iter()
+            .map(|key| if key.is_empty() { os } else { key })
+            .filter_map(|key| self.on.get(key));
+
+        let mut resolved = ResolvedLaunch {
+            program: self.program.clone(),
+            args: self.args.clone(),
+            new_session_args: self.new_session_args.clone(),
+        };
+        // Each field takes the first platform that names it, so a `unix` entry
+        // can supply the arguments while `linux` overrides only the program.
+        let mut program = None;
+        let mut args = None;
+        let mut new_session_args = None;
+        for platform in platforms {
+            program = program.or(platform.program.clone());
+            args = args.or(platform.args.clone());
+            new_session_args = new_session_args.or(platform.new_session_args.clone());
+        }
+        if let Some(program) = program {
+            resolved.program = Some(program);
+        }
+        if let Some(args) = args {
+            resolved.args = args;
+        }
+        if let Some(new_session_args) = new_session_args {
+            resolved.new_session_args = new_session_args;
+        }
+        resolved
+    }
+
+    /// Whether anything at all in this `launch` names a program.
+    ///
+    /// False only for a manifest that says nothing about what to run, which
+    /// cannot be anything but a mistake and is refused at load. It is
+    /// deliberately not "could start on a platform this build knows about":
+    /// checking the keys against a fixed list would refuse a manifest written
+    /// for a platform a newer Argus runs on, and manifests are copied between
+    /// machines and outlive the version that wrote them.
+    ///
+    /// The cost is that a misspelt key -- `windwos` -- loads, and shows up as
+    /// an agent that is unavailable everywhere. [`Self::platforms_named`] is
+    /// what makes that diagnosable.
+    pub fn names_a_program_somewhere(&self) -> bool {
+        self.program.is_some() || self.on.values().any(|p| p.program.is_some())
+    }
+
+    /// The platform keys this `launch` names a program for, in order.
+    ///
+    /// For the message when an agent cannot start here: printing the keys the
+    /// manifest actually has turns a misspelt one from a mystery into an
+    /// obvious typo, without the loader having to decide which keys are real.
+    pub fn platforms_named(&self) -> Vec<&str> {
+        self.on
+            .iter()
+            .filter(|(_, platform)| platform.program.is_some())
+            .map(|(key, _)| key.as_str())
+            .collect()
+    }
+
+    /// Every command line this manifest can produce, on any platform.
+    ///
+    /// Validity has to be the same answer everywhere: one unloadable manifest
+    /// refuses a whole manifest directory, so a set that starts the engine on
+    /// Windows and refuses to start it on Linux would be a trap. Whatever the
+    /// loader checks about arguments, it therefore checks against all of these
+    /// rather than against the platform it happens to be running on.
+    ///
+    /// Finite because the keys are: each entry under `on`, plus the two shapes
+    /// a *missing* key can take -- Windows with no `windows` entry, and
+    /// anything else, which still picks up `unix`.
+    pub fn every_resolution(&self) -> Vec<ResolvedLaunch> {
+        self.on
+            .keys()
+            .map(String::as_str)
+            .chain(["windows", "linux"])
+            .map(|os| self.resolve_for(os))
+            .collect()
+    }
 }
 
 /// How to resume a previous session.
@@ -134,6 +275,32 @@ pub struct ScreenRule {
     /// Which part of the screen to match against.
     #[serde(default)]
     pub region: Region,
+
+    /// Platforms this rule applies to. Empty means all of them.
+    ///
+    /// Same vocabulary as [`Launch::on`]: `windows`, `macos`, `linux`, or
+    /// `unix` for everything that is not Windows.
+    ///
+    /// Needed because one manifest serves several shells, and their prompts
+    /// are not equally distinctive. `sh` draws `$`, `zsh` draws `%`, and a
+    /// rule loose enough to catch a real `zsh` prompt -- which carries the
+    /// host and the directory, so the sigil can follow anything -- comes down
+    /// to "the line ends with `%`". Live on Windows, that would read a line of
+    /// output ending in `45%` as a prompt and call a busy session idle.
+    /// Scoping the rule costs a key; guessing costs a wrong status.
+    #[serde(default)]
+    pub only_on: Vec<String>,
+}
+
+impl ScreenRule {
+    /// Whether this rule applies on `os`, an [`std::env::consts::OS`] value.
+    pub fn applies_to(&self, os: &str) -> bool {
+        self.only_on.is_empty()
+            || self
+                .only_on
+                .iter()
+                .any(|key| key == os || (key == "unix" && os != "windows"))
+    }
 }
 
 /// Where on the screen a rule looks.

@@ -444,6 +444,7 @@ fn a_blocker_outranks_the_spinner_on_the_claude_code_manifest() {
     assert_eq!(agent.classify(&screen).status, Some(Status::NeedsYou));
 }
 
+#[cfg(windows)]
 #[test]
 fn the_shell_manifest_recognises_a_powershell_prompt() {
     // Taken from a real ConPTY capture in step 2.
@@ -506,6 +507,7 @@ fn an_earlier_bare_prompt_does_not_make_a_busy_shell_idle() {
     assert_eq!(shell().classify(&screen).status, Some(Status::Working));
 }
 
+#[cfg(windows)]
 #[test]
 fn a_bare_prompt_at_the_bottom_is_idle_even_with_trailing_blank_rows() {
     let mut screen: Vec<String> = [
@@ -522,6 +524,7 @@ fn a_bare_prompt_at_the_bottom_is_idle_even_with_trailing_blank_rows() {
     assert_eq!(matched.rule.as_deref(), Some("powershell-prompt"));
 }
 
+#[cfg(windows)]
 #[test]
 fn a_cmd_prompt_at_the_bottom_is_idle() {
     let screen = [r"C:\Users\Hashim>echo hi", "hi", "", r"C:\Users\Hashim>"];
@@ -549,6 +552,7 @@ fn a_question_on_the_last_line_needs_you() {
     assert_eq!(shell().classify(&screen).status, Some(Status::NeedsYou));
 }
 
+#[cfg(windows)]
 #[test]
 fn an_answered_question_still_on_screen_does_not_need_you() {
     // Found live in step 6: after answering `n`, the session stayed NEEDS YOU,
@@ -560,6 +564,74 @@ fn an_answered_question_still_on_screen_does_not_need_you() {
         "Deploy to production. Are you sure (y/n): n",
         "n",
         r"PS C:\Users\Hashim>",
+    ];
+    let matched = shell().classify(&screen);
+    assert_eq!(
+        matched.status,
+        Some(Status::Idle),
+        "rule: {:?}",
+        matched.rule
+    );
+}
+
+// ---- the same shapes, on the shells Unix actually draws -------------------
+//
+// `sh-prompt` has to be loose about what comes before the sigil, because a
+// real prompt carries whatever the shell puts there: nothing for `dash`, the
+// host and directory for `zsh`. That looseness is why the rule is scoped to
+// Unix -- on Windows it would read a line of output ending in `45%` as a
+// prompt and call a busy session idle.
+
+#[cfg(unix)]
+#[test]
+fn the_shell_manifest_recognises_an_sh_prompt() {
+    let agent = shell();
+
+    // `dash`, as a GitHub Linux runner draws it: the sigil and nothing else.
+    let bare = ["hello-from-sh", "$"];
+    let matched = agent.classify(&bare);
+    assert_eq!(matched.status, Some(Status::Idle));
+    assert_eq!(matched.rule.as_deref(), Some("sh-prompt"));
+
+    // `zsh`, copied from a macOS runner. The host and the directory come
+    // first, which is what defeated a tighter pattern: the single-token form
+    // `^\S*[$#%]\s*$` matched the line above and not this one.
+    let zsh = [
+        "hello-from-zsh",
+        "runner@sjc22-bt143-a21a818d-d28d-476f-b38a-8c4a864afbd6-86E5A758F386 engine %",
+    ];
+    let matched = agent.classify(&zsh);
+    assert_eq!(matched.status, Some(Status::Idle));
+    assert_eq!(matched.rule.as_deref(), Some("sh-prompt"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_bare_sh_prompt_at_the_bottom_is_idle_even_with_trailing_blank_rows() {
+    let mut screen: Vec<String> = ["$ echo hi", "hi", "$"].map(String::from).to_vec();
+    screen.extend(std::iter::repeat_n(String::new(), 20));
+
+    let matched = shell().classify(&screen);
+    assert_eq!(matched.status, Some(Status::Idle));
+    assert_eq!(matched.rule.as_deref(), Some("sh-prompt"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_running_command_is_working_on_unix_too() {
+    // The command's own line ends in a digit, not a sigil, so the catch-all
+    // claims it. The prompt rule being loose must not make everything idle.
+    let screen = ["$ sleep 60"];
+    assert_eq!(shell().classify(&screen).status, Some(Status::Working));
+}
+
+#[cfg(unix)]
+#[test]
+fn an_answered_question_still_on_screen_does_not_need_you_on_unix() {
+    let screen = [
+        "$ read -p 'Deploy to production. Are you sure (y/n)' a",
+        "Deploy to production. Are you sure (y/n)n",
+        "$",
     ];
     let matched = shell().classify(&screen);
     assert_eq!(
@@ -712,4 +784,298 @@ fn claudes_welcome_banner_alone_does_not_claim_anything_wrong() {
     .to_vec();
     screen.extend(claude_bottom(&[], ">"));
     assert_eq!(claude().classify(&screen).status, Some(Status::Idle));
+}
+
+// ---- per-platform programs -------------------------------------------------
+
+/// How a load turned out, for a panic message: `Agent` is deliberately not
+/// `Debug`, since dumping every compiled rule would bury the thing that failed.
+fn described(result: Result<Agent, ManifestError>) -> String {
+    match result {
+        Ok(agent) => format!("a loaded agent `{}`", agent.id()),
+        Err(error) => error.to_string(),
+    }
+}
+
+/// Parse the `launch` of a manifest, without compiling the rest of it.
+fn launch(json: &str) -> argus_manifest::Launch {
+    let full = format!(
+        r#"{{
+          "id": "test",
+          "display_name": "Test",
+          "launch": {json},
+          "rules": [{{ "name": "busy", "status": "working", "pattern": "x" }}]
+        }}"#
+    );
+    let agent = Agent::from_json(&full, "test.json").expect("should load");
+    agent.manifest().launch.clone()
+}
+
+#[test]
+fn one_program_answers_for_every_platform() {
+    // The common case, and the one that must not have to change: an agent that
+    // is one program with one name says so once.
+    let launch = launch(r#"{ "program": "claude", "args": ["--no-color"] }"#);
+    for os in ["windows", "macos", "linux", "freebsd"] {
+        let resolved = launch.resolve_for(os);
+        assert_eq!(resolved.program.as_deref(), Some("claude"), "{os}");
+        assert_eq!(resolved.args, ["--no-color"], "{os}");
+    }
+}
+
+#[test]
+fn a_platform_entry_overrides_only_the_fields_it_names() {
+    let launch = launch(
+        r#"{
+          "program": "claude",
+          "args": ["--no-color"],
+          "on": { "windows": { "program": "claude.cmd" } }
+        }"#,
+    );
+
+    let windows = launch.resolve_for("windows");
+    assert_eq!(windows.program.as_deref(), Some("claude.cmd"));
+    assert_eq!(
+        windows.args,
+        ["--no-color"],
+        "an entry that renames the program should not have to restate its arguments"
+    );
+    assert_eq!(
+        launch.resolve_for("linux").program.as_deref(),
+        Some("claude")
+    );
+}
+
+#[test]
+fn unix_answers_for_everything_that_is_not_windows() {
+    let launch = launch(
+        r#"{
+          "on": {
+            "windows": { "program": "powershell.exe", "args": ["-NoLogo"] },
+            "unix": { "program": "/bin/sh", "args": ["-i"] }
+          }
+        }"#,
+    );
+
+    assert_eq!(
+        launch.resolve_for("windows").program.as_deref(),
+        Some("powershell.exe")
+    );
+    for os in ["linux", "macos", "freebsd"] {
+        assert_eq!(
+            launch.resolve_for(os).program.as_deref(),
+            Some("/bin/sh"),
+            "{os}"
+        );
+    }
+}
+
+#[test]
+fn the_more_specific_platform_wins_over_unix() {
+    // And each field separately: `macos` renames the program while the
+    // arguments still come from `unix`.
+    let launch = launch(
+        r#"{
+          "on": {
+            "macos": { "program": "/bin/zsh" },
+            "unix": { "program": "/bin/sh", "args": ["-i"] }
+          }
+        }"#,
+    );
+
+    let macos = launch.resolve_for("macos");
+    assert_eq!(macos.program.as_deref(), Some("/bin/zsh"));
+    assert_eq!(macos.args, ["-i"]);
+    assert_eq!(
+        launch.resolve_for("linux").program.as_deref(),
+        Some("/bin/sh")
+    );
+}
+
+#[test]
+fn a_unix_path_never_reaches_windows() {
+    // `unix` is consulted only off Windows, so a manifest cannot hand a
+    // Windows machine a `/bin` path by leaving out a `windows` entry. It gets
+    // "not here" instead, which is true and fixable.
+    let launch = launch(r#"{ "on": { "unix": { "program": "/bin/sh" } } }"#);
+    assert_eq!(launch.resolve_for("windows").program, None);
+    assert_eq!(
+        launch.resolve_for("linux").program.as_deref(),
+        Some("/bin/sh")
+    );
+}
+
+#[test]
+fn an_empty_argument_list_overrides_rather_than_being_ignored() {
+    // `Option<Vec<_>>` rather than `Vec<_>`, so "no arguments on this
+    // platform" is sayable and is not mistaken for "nothing to say".
+    let launch = launch(
+        r#"{
+          "program": "sh",
+          "args": ["-i"],
+          "on": { "windows": { "program": "cmd.exe", "args": [] } }
+        }"#,
+    );
+    assert!(launch.resolve_for("windows").args.is_empty());
+    assert_eq!(launch.resolve_for("linux").args, ["-i"]);
+}
+
+#[test]
+fn a_manifest_that_names_no_program_at_all_is_refused() {
+    // Startable somewhere and not here is a fact to report. Saying nothing
+    // about what to run is a mistake, and one unloadable manifest refuses the
+    // whole directory, so it is caught at load with a message saying what to
+    // add.
+    let json = r#"{
+      "id": "nowhere",
+      "display_name": "Nowhere",
+      "launch": { "args": ["-i"] },
+      "rules": [{ "name": "busy", "status": "working", "pattern": "x" }]
+    }"#;
+    match Agent::from_json(json, "test.json") {
+        Err(error @ ManifestError::NoProgram { .. }) => {
+            assert!(error.to_string().contains("launch.on"), "{error}");
+        }
+        other => panic!("expected NoProgram, got {}", described(other)),
+    }
+}
+
+#[test]
+fn a_rule_can_name_the_platforms_it_applies_to() {
+    // Checked from whichever platform runs the tests, against the table
+    // rather than the compiled set, so every answer is visible from one
+    // machine.
+    let rule: argus_manifest::ScreenRule = serde_json::from_str(
+        r#"{ "name": "r", "status": "idle", "pattern": "x", "only_on": ["unix"] }"#,
+    )
+    .unwrap();
+    assert!(!rule.applies_to("windows"));
+    for os in ["linux", "macos", "freebsd"] {
+        assert!(rule.applies_to(os), "{os}");
+    }
+
+    let specific: argus_manifest::ScreenRule = serde_json::from_str(
+        r#"{ "name": "r", "status": "idle", "pattern": "x", "only_on": ["macos"] }"#,
+    )
+    .unwrap();
+    assert!(specific.applies_to("macos"));
+    assert!(!specific.applies_to("linux"));
+
+    let everywhere: argus_manifest::ScreenRule =
+        serde_json::from_str(r#"{ "name": "r", "status": "idle", "pattern": "x" }"#).unwrap();
+    for os in ["windows", "macos", "linux"] {
+        assert!(everywhere.applies_to(os), "{os}");
+    }
+}
+
+#[test]
+fn a_manifest_whose_every_rule_is_scoped_is_refused() {
+    // A platform with no applicable rule could never report a status, and it
+    // would fail silently: sessions that never leave `working`, with nothing
+    // to point at. Requiring one unscoped rule rules that out without having
+    // to enumerate platforms, and the catch-all a manifest needs anyway is
+    // exactly such a rule.
+    let json = r#"{
+      "id": "scoped",
+      "display_name": "Scoped",
+      "launch": { "program": "sh" },
+      "rules": [
+        { "name": "win", "status": "idle", "pattern": "x", "only_on": ["windows"] },
+        { "name": "nix", "status": "idle", "pattern": "x", "only_on": ["unix"] }
+      ]
+    }"#;
+    match Agent::from_json(json, "test.json") {
+        Err(error @ ManifestError::EveryRuleIsScoped { .. }) => {
+            assert!(error.to_string().contains("only_on"), "{error}");
+        }
+        other => panic!("expected EveryRuleIsScoped, got {}", described(other)),
+    }
+}
+
+#[test]
+fn a_bad_pattern_is_refused_even_in_a_rule_this_platform_skips() {
+    // Validity cannot depend on the platform, so every pattern is compiled
+    // whether or not this machine will use it. Otherwise a typo in a
+    // Windows-only rule would lie dormant until someone ran it on Windows.
+    let elsewhere = if cfg!(windows) { "linux" } else { "windows" };
+    let json = format!(
+        r#"{{
+          "id": "badpattern",
+          "display_name": "Bad Pattern",
+          "launch": {{ "program": "sh" }},
+          "rules": [
+            {{ "name": "busy", "status": "working", "pattern": "x" }},
+            {{ "name": "bad", "status": "idle", "pattern": "a(", "only_on": ["{elsewhere}"] }}
+          ]
+        }}"#
+    );
+    match Agent::from_json(&json, "test.json") {
+        Err(ManifestError::Pattern { rule, .. }) => assert_eq!(rule, "bad"),
+        other => panic!("expected a pattern error, got {}", described(other)),
+    }
+}
+
+#[test]
+fn a_misspelt_platform_key_loads_and_reads_as_unavailable() {
+    // The deliberate limit of the load-time check. Refusing unknown keys
+    // would refuse a manifest written for a platform a newer Argus runs on,
+    // and these files are copied between machines. So `windwos` loads, and the
+    // symptom is an agent that can start nowhere -- which `platforms_named`
+    // makes diagnosable, because the spawn error prints the key that is there
+    // next to the one that should be.
+    let json = r#"{
+      "id": "typo",
+      "display_name": "Typo",
+      "launch": { "on": { "windwos": { "program": "powershell.exe" } } },
+      "rules": [{ "name": "busy", "status": "working", "pattern": "x" }]
+    }"#;
+    let agent = Agent::from_json(json, "test.json").expect("an unknown key is not a parse error");
+    assert!(!agent.available_here());
+    assert_eq!(agent.manifest().launch.platforms_named(), ["windwos"]);
+}
+
+#[test]
+fn whether_a_manifest_is_valid_does_not_depend_on_the_platform() {
+    // `resume` asks for a conversation by id, and the Windows launch hands one
+    // over while the Unix launch does not. Refusing this only on Unix would
+    // mean a manifest directory that starts the engine on one machine and
+    // refuses to start it on another, so it is refused on both.
+    let json = r#"{
+      "id": "lopsided",
+      "display_name": "Lopsided",
+      "launch": {
+        "on": {
+          "windows": { "program": "a.exe", "new_session_args": ["--id", "{session_uuid}"] },
+          "unix": { "program": "a", "new_session_args": [] }
+        }
+      },
+      "resume": { "args": ["--resume", "{session_uuid}"] },
+      "rules": [{ "name": "busy", "status": "working", "pattern": "x" }]
+    }"#;
+    assert!(
+        matches!(
+            Agent::from_json(json, "test.json"),
+            Err(ManifestError::ResumeWithoutSessionUuid { .. })
+        ),
+        "a manifest that is wrong on one platform should be refused on all of them"
+    );
+}
+
+#[test]
+fn the_shipped_shell_manifest_starts_on_every_platform_argus_supports() {
+    // The manifest this whole schema exists for. It used to name
+    // `powershell.exe` for everybody, which made the engine portable and the
+    // one agent it ships with unusable off Windows.
+    let agent = Agent::from_path(manifest_dir().join("shell.json")).expect("should load");
+    let launch = &agent.manifest().launch;
+    for os in ["windows", "macos", "linux"] {
+        assert!(
+            launch.resolve_for(os).program.is_some(),
+            "the shell should be startable on {os}"
+        );
+    }
+    assert!(
+        agent.available_here(),
+        "including the one running this test"
+    );
 }
