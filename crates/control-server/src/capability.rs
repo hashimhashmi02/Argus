@@ -29,7 +29,34 @@ pub enum Capability {
     WatchSession { id: String },
 }
 
+/// Where a watch came from.
+///
+/// Two variants rather than passing the whole [`Capability`] to a handler,
+/// because this is the only thing a handler needs to know about it, and a
+/// handler that could read the capability could also start enforcing it --
+/// which is the server's job and is already done by the time `watch` is
+/// called.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Viewer {
+    /// On the engine's own pipe or socket: this machine, this user.
+    Local,
+    /// On a connection that redeemed an invite, from wherever that was.
+    Remote,
+}
+
 impl Capability {
+    /// Where a connection holding this capability is watching from.
+    ///
+    /// `Full` is only ever granted on the local pipe or socket, and
+    /// `WatchSession` only ever by redeeming an invite, so the capability
+    /// already carries the answer and nothing has to be plumbed alongside it.
+    pub fn viewer(&self) -> Viewer {
+        match self {
+            Capability::Full => Viewer::Local,
+            Capability::WatchSession { .. } => Viewer::Remote,
+        }
+    }
+
     /// Whether this connection may make this request.
     ///
     /// Matching is exhaustive on purpose. Adding a `Request` variant breaks

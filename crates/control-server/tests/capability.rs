@@ -4,10 +4,12 @@
 //! actually consulted: that a refusal happens in the server, before the
 //! handler, and that a `watch` the policy denies never starts streaming.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
-use argus_control_server::{Capability, Client, ClientError, Handler, Server, unique_pipe_name};
+use argus_control_server::{
+    Capability, Client, ClientError, Handler, Server, Viewer, unique_pipe_name,
+};
 use argus_protocol::{
     ErrorCode, Reply, Request, Response, RpcError, SessionInfo, Status, WatchEvent,
 };
@@ -18,6 +20,8 @@ use tokio::sync::{mpsc, oneshot};
 struct Counting {
     handled: AtomicUsize,
     watched: AtomicUsize,
+    /// Where each watch that started said it came from, in order.
+    viewers: Mutex<Vec<Viewer>>,
 }
 
 impl Handler for Counting {
@@ -38,14 +42,23 @@ impl Handler for Counting {
                     resumable: false,
                     cwd: None,
                     branch: None,
+                    remote_watchers: 0,
                 }],
             }),
             _ => Response::Ok(Reply::Done),
         }
     }
 
-    async fn watch(&self, _id: String) -> Result<mpsc::Receiver<WatchEvent>, RpcError> {
+    async fn watch(
+        &self,
+        _id: String,
+        from: Viewer,
+    ) -> Result<mpsc::Receiver<WatchEvent>, RpcError> {
         self.watched.fetch_add(1, Ordering::Relaxed);
+        self.viewers
+            .lock()
+            .expect("no test panics holding this")
+            .push(from);
         let (tx, rx) = mpsc::channel(4);
         tokio::spawn(async move {
             let _ = tx.send(WatchEvent::Ended).await;
@@ -185,6 +198,56 @@ async fn a_refused_watch_never_starts_streaming() {
     };
     assert_eq!(error.code, ErrorCode::Forbidden);
     assert_eq!(server.handler.watched.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn a_watch_says_whether_it_came_from_this_machine() {
+    // The number the window shows is "is anyone *else* watching", so the
+    // handler has to be able to tell its own watch from an invited one. It
+    // learns that from the capability, which means neither the invite nor the
+    // local socket has to carry anything extra to say so.
+    let remote = start(
+        "cap-from-away",
+        Capability::WatchSession {
+            id: "3fa1c2d4".into(),
+        },
+    );
+    let client = Client::connect(&remote.pipe).await.unwrap();
+    let mut watcher = client.watch("3fa1c2d4").await.unwrap();
+    assert_eq!(watcher.next().await.unwrap(), Some(WatchEvent::Ended));
+    assert_eq!(
+        *remote.handler.viewers.lock().unwrap(),
+        vec![Viewer::Remote],
+        "a connection that redeemed an invite is watching from elsewhere"
+    );
+
+    let local = start("cap-from-here", Capability::Full);
+    let client = Client::connect(&local.pipe).await.unwrap();
+    let mut watcher = client.watch("3fa1c2d4").await.unwrap();
+    assert_eq!(watcher.next().await.unwrap(), Some(WatchEvent::Ended));
+    assert_eq!(
+        *local.handler.viewers.lock().unwrap(),
+        vec![Viewer::Local],
+        "the engine's own pipe is this machine"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_watch_is_never_counted_as_a_viewer() {
+    // The refusal happens in the server, so `watch` is never called and
+    // nothing can have been counted. Worth asserting rather than assuming:
+    // counting a watch that was refused would show a session as watched by
+    // someone who was turned away.
+    let server = start(
+        "cap-refused-viewer",
+        Capability::WatchSession {
+            id: "3fa1c2d4".into(),
+        },
+    );
+
+    let client = Client::connect(&server.pipe).await.unwrap();
+    assert!(client.watch("99999999").await.is_err());
+    assert!(server.handler.viewers.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

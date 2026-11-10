@@ -814,6 +814,22 @@ used is identical: which of those it was is exactly what an attacker would like
 to learn. Secrets are compared in constant time, and consumed even when
 refused, so a single-use token cannot be retried after a near miss.
 
+And the window says when someone is there. Handing out an invite is a decision
+with an afterwards: the token is single-use and short-lived, but a watch that
+started inside that window lasts as long as the watcher keeps the connection
+open, which can be hours. A person who does not know whether anyone is still
+looking at their agent's screen has not really been given control over it, only
+over the first minute of it. So `SessionInfo` carries `remote_watchers` and the
+pane says `watched` on its border, in the same furniture as its branch and its
+status.
+
+The count deliberately excludes the window's own watch. It answers "is anyone
+*else* looking at this", and a number that was always at least one would answer
+nothing. The engine tells the two apart from the capability the connection
+already holds -- `Full` is only ever granted on the local socket and
+`WatchSession` only ever by redeeming an invite -- so neither the invite nor the
+socket carries anything extra to say where a watch came from.
+
 ## Hardening rules
 
 These are not hypothetical. They come from the bug history of Zeus and from the
@@ -871,6 +887,7 @@ Each step is a working, runnable checkpoint — not a half-finished layer.
 | 14a | Invites minted from the window, and an `Invite` that carries no clock | **done** |
 | 14b | CI on three platforms, Linux and macOS first so the port has a target | **done** |
 | 14c | The engine, the CLI and the whole suite run on Linux and macOS | **done** |
+| 14d | `remote_watchers`, so the window says when someone else is watching | **done** |
 
 The UI is last on purpose. A UI built on an unstable protocol locks in the
 mistakes of that protocol.

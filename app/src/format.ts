@@ -53,6 +53,19 @@ export function flag(s: SessionInfo): string {
  * The status as a pane border spells it. A finished pane uses tmux's own word
  * for one whose process has gone: it is dead, with the exit status.
  */
+/**
+ * How the pane says someone else is watching, or nothing when nobody is.
+ *
+ * An eye rather than a count at one, because one is the case the invite is
+ * built for and "watched" reads faster than "watched 1". The number appears
+ * only when there is a number worth reading.
+ */
+export function watchedBy(s: SessionInfo): string | undefined {
+  const n = s.remote_watchers ?? 0;
+  if (n === 0) return undefined;
+  return n === 1 ? "watched" : `watched \u00d7${n}`;
+}
+
 export function paneStatus(s: SessionInfo): string {
   if (s.status === "done") {
     if (s.lost) return "lost";

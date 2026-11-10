@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use argus_control_server::{ClientError, Handler, QuicListener, quic_connect};
+use argus_control_server::{ClientError, Handler, QuicListener, Viewer, quic_connect};
 use argus_protocol::{ErrorCode, Reply, Request, Response, RpcError, WatchEvent};
 use tokio::sync::{mpsc, oneshot};
 
@@ -27,7 +27,11 @@ impl Handler for Streaming {
         Response::Ok(Reply::Done)
     }
 
-    async fn watch(&self, _id: String) -> Result<mpsc::Receiver<WatchEvent>, RpcError> {
+    async fn watch(
+        &self,
+        _id: String,
+        _from: Viewer,
+    ) -> Result<mpsc::Receiver<WatchEvent>, RpcError> {
         self.watched.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::channel(4);
         tokio::spawn(async move {

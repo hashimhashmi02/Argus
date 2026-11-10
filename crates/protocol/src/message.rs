@@ -296,6 +296,24 @@ pub struct SessionInfo {
     /// The branch of the git worktree Argus made for the session, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    /// How many people are watching this session from somewhere else.
+    ///
+    /// Counts only watches that arrived on a connection holding nothing but
+    /// [`Capability::WatchSession`](../../argus_control_server/enum.Capability.html)
+    /// -- one that redeemed an invite. The window's own watch of the session
+    /// it is showing does not count itself, which is the whole point: the
+    /// number answers "is anyone else looking at this", and a number that was
+    /// always at least one would answer nothing.
+    ///
+    /// Additive, like `status_for_ms`: omitted when zero, defaulted when
+    /// absent, so no version bump.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub remote_watchers: u32,
+}
+
+/// `skip_serializing_if` for a count, so the common case sends no field.
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// An emulated screen, as text.

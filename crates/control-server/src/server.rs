@@ -9,7 +9,7 @@ use argus_protocol::{
     RpcError, WatchEvent, encode,
 };
 
-use crate::Capability;
+use crate::{Capability, Viewer};
 use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 #[cfg(windows)]
@@ -67,12 +67,18 @@ pub trait Handler: Send + Sync + 'static {
     /// which a handler does after sending [`WatchEvent::Ended`]. Dropping the
     /// receiver -- when the client hangs up -- is how a handler learns to stop.
     ///
+    /// `from` says whether this watch arrived locally or by redeeming an
+    /// invite. The server has already decided whether the connection may watch
+    /// at all; this is only so a handler can report who is looking.
+    ///
     /// Defaults to refusing, so a handler that has nothing to stream, like the
     /// tests' stubs, does not have to say so.
     fn watch(
         &self,
         id: String,
+        from: Viewer,
     ) -> impl Future<Output = Result<mpsc::Receiver<WatchEvent>, RpcError>> + Send {
+        let _ = from;
         async move {
             Err(RpcError::new(
                 ErrorCode::BadRequest,
@@ -274,7 +280,7 @@ pub(crate) async fn serve_connection<S: Connection, H: Handler>(
                 }
                 Ok(Some(envelope)) => match watch_target(&envelope) {
                     // A watch takes the connection over for good, if it starts.
-                    Some(id) => match handler.watch(id).await {
+                    Some(id) => match handler.watch(id, capability.viewer()).await {
                         Ok(events) => {
                             if write_frame(&mut writer, &Response::Ok(Reply::Watching))
                                 .await
