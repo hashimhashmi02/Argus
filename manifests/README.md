@@ -65,10 +65,27 @@ written for a platform a newer Argus runs on; it shows up as an agent that
 starts nowhere, and the spawn error prints the keys the manifest does have next
 to the one it wanted.
 
-Note that `rules` are **not** per-platform. They are already a priority-ordered
-list where a rule that does not match costs nothing, so a manifest serving
-several shells simply carries a rule for each — `shell.json` has one for the
-PowerShell prompt, one for `cmd`, and one for `sh`.
+A `rule` may name platforms the same way, with `only_on`:
+
+```json
+{ "name": "sh-prompt", "status": "idle", "pattern": "[$#%]\\s*$", "only_on": ["unix"] }
+```
+
+Rules are a priority-ordered list where one that does not match costs nothing,
+so a manifest serving several shells could *mostly* just carry a rule for each.
+What forces `only_on` is that the prompts are not equally distinctive. `zsh`
+draws `host dir %`, so a rule that catches a real `zsh` prompt has to be loose
+about everything before the sigil — which comes down to "the line ends with
+`%`". Live on Windows, that would read output ending in `45%` as a prompt and
+call a busy session idle.
+
+**At least one rule must be unscoped.** A platform with no applicable rule
+could never report a status, and it would fail silently: sessions that never
+leave `working`. The catch-all rule a manifest needs anyway is exactly the one
+to leave unscoped, and a manifest that scopes every rule is rejected at load.
+
+Every pattern is compiled whether or not this machine will use it, so a typo in
+a Windows-only rule fails to load on Linux too, rather than lying dormant.
 
 [`std::env::consts::OS`]: https://doc.rust-lang.org/std/env/consts/constant.OS.html
 

@@ -87,6 +87,21 @@ impl Agent {
             }
         }
 
+        // A rule may name the platforms it applies to, so one manifest can
+        // serve shells whose prompts look nothing alike. At least one rule has
+        // to apply everywhere, though: a platform with no applicable rule
+        // could never report a status, and it would do that silently -- the
+        // session would simply never leave `working`. Requiring one unscoped
+        // rule rules that out without having to enumerate platforms, and the
+        // catch-all a manifest needs anyway is exactly such a rule.
+        if !manifest.rules.iter().any(|rule| rule.only_on.is_empty()) {
+            return Err(ManifestError::EveryRuleIsScoped { id: manifest.id });
+        }
+
+        // Every pattern is compiled, including rules this platform will not
+        // use, so a bad regex fails to load everywhere rather than only on the
+        // machines that happen to reach it. Then the ones that do not apply
+        // are dropped, which keeps `classify` free of any notion of platform.
         let mut rules = manifest
             .rules
             .iter()
@@ -102,6 +117,7 @@ impl Agent {
                     })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        rules.retain(|compiled| compiled.rule.applies_to(std::env::consts::OS));
 
         // Sorted once, here, so `classify` can stop at the first match.
         //

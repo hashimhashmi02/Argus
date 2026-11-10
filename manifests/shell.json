@@ -26,21 +26,24 @@
       "status": "idle",
       "pattern": "^PS [^\\n]*>\\s*$",
       "priority": 10,
-      "region": { "last_lines": 1 }
+      "region": { "last_lines": 1 },
+      "only_on": ["windows"]
     },
     {
       "name": "cmd-prompt",
       "status": "idle",
       "pattern": "^[A-Za-z]:\\\\[^\\n]*>\\s*$",
       "priority": 10,
-      "region": { "last_lines": 1 }
+      "region": { "last_lines": 1 },
+      "only_on": ["windows"]
     },
     {
       "name": "sh-prompt",
       "status": "idle",
-      "pattern": "^\\S*[$#%]\\s*$",
+      "pattern": "[$#%]\\s*$",
       "priority": 10,
-      "region": { "last_lines": 1 }
+      "region": { "last_lines": 1 },
+      "only_on": ["unix"]
     },
     {
       "name": "busy",

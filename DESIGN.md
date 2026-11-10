@@ -965,13 +965,43 @@ wrote them. The typo instead shows up as an agent that starts nowhere, and the
 spawn error prints the keys the manifest does have beside the one it wanted,
 which is what makes it obvious rather than mysterious.
 
-`rules` are *not* per-platform, and did not need to be. They are already a
-priority-ordered list in which a rule that does not match costs nothing, so
-`shell.json` simply carries a prompt rule for PowerShell, one for `cmd` and one
-for `sh`. The `sh` pattern is tighter than it would have to be on Unix alone
-(`^\S*[$#%]\s*$`, a single token rather than anything ending in `$`) precisely
-because it is also live on Windows, where a loose version could misread a line
-of output as a prompt.
+Rules needed the same treatment, which took being shown. A rule that does not
+match costs nothing in a priority-ordered list, so one manifest looked able to
+carry a prompt rule for PowerShell, one for `cmd` and one for `sh` with no
+scoping at all. The `sh` rule was written tight on purpose -- `^\S*[$#%]\s*$`,
+a single token rather than anything ending in `$` -- because on Windows a loose
+version would read a line of output ending in `45%` as a prompt and call a busy
+session idle.
+
+Then CI ran the shipped manifest on macOS, where `zsh` draws
+
+```
+runner@sjc22-bt143-a21a818d-...-86E5A758F386 engine %
+```
+
+The sigil follows the host and the directory, so a rule that matches a real
+`zsh` prompt cannot be tight about what precedes it, and there is no tightening
+left: the trailing space that would have been a discriminator is gone, because
+the emulator trims it. A rule loose enough to be correct on Unix is wrong on
+Windows, which is the definition of a rule that has to be scoped.
+
+So `ScreenRule.only_on` takes the same vocabulary as `launch.on`, and
+`shell.json` scopes its three prompt rules while leaving the confirmation rule
+and the catch-all alone. Two things keep that from opening a hole of its own:
+
+- **At least one rule must be unscoped.** A platform with no applicable rule
+  could never report a status, and it would fail *silently* -- sessions that
+  never leave `working`, with nothing to point at. Requiring one unscoped rule
+  rules that out without having to enumerate platforms, and the catch-all a
+  manifest needs anyway is exactly such a rule.
+- **Every pattern is compiled, including rules this platform will not use.** A
+  typo in a Windows-only rule therefore fails to load on Linux as well, rather
+  than waiting for someone to run it on Windows. Validity stays the same answer
+  everywhere, as it does for arguments.
+
+This is the part of the step the tests earned rather than the design: the
+single-token pattern passed on Windows and on Linux, and only the test that
+spawns the *shipped* manifest on a real macOS runner showed it was wrong.
 
 ### On `portable-pty` vs raw ConPTY
 

@@ -40,6 +40,15 @@ pub enum ManifestError {
     #[error("manifest `{id}` has no rules, so it could never report a status")]
     NoRules { id: String },
 
+    /// Every rule names an `only_on`, so some platform would have none at all
+    /// -- and would fail silently, with sessions that never leave `working`
+    /// rather than an error anyone would see.
+    #[error(
+        "manifest `{id}` scopes every rule with `only_on`, so a platform not \
+         named could never report a status; leave the catch-all rule unscoped"
+    )]
+    EveryRuleIsScoped { id: String },
+
     /// Neither `launch.program` nor any entry under `launch.on` names a
     /// program, so the manifest never says what to run.
     ///

@@ -275,6 +275,32 @@ pub struct ScreenRule {
     /// Which part of the screen to match against.
     #[serde(default)]
     pub region: Region,
+
+    /// Platforms this rule applies to. Empty means all of them.
+    ///
+    /// Same vocabulary as [`Launch::on`]: `windows`, `macos`, `linux`, or
+    /// `unix` for everything that is not Windows.
+    ///
+    /// Needed because one manifest serves several shells, and their prompts
+    /// are not equally distinctive. `sh` draws `$`, `zsh` draws `%`, and a
+    /// rule loose enough to catch a real `zsh` prompt -- which carries the
+    /// host and the directory, so the sigil can follow anything -- comes down
+    /// to "the line ends with `%`". Live on Windows, that would read a line of
+    /// output ending in `45%` as a prompt and call a busy session idle.
+    /// Scoping the rule costs a key; guessing costs a wrong status.
+    #[serde(default)]
+    pub only_on: Vec<String>,
+}
+
+impl ScreenRule {
+    /// Whether this rule applies on `os`, an [`std::env::consts::OS`] value.
+    pub fn applies_to(&self, os: &str) -> bool {
+        self.only_on.is_empty()
+            || self
+                .only_on
+                .iter()
+                .any(|key| key == os || (key == "unix" && os != "windows"))
+    }
 }
 
 /// Where on the screen a rule looks.

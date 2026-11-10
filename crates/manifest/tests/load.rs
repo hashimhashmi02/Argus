@@ -444,6 +444,7 @@ fn a_blocker_outranks_the_spinner_on_the_claude_code_manifest() {
     assert_eq!(agent.classify(&screen).status, Some(Status::NeedsYou));
 }
 
+#[cfg(windows)]
 #[test]
 fn the_shell_manifest_recognises_a_powershell_prompt() {
     // Taken from a real ConPTY capture in step 2.
@@ -506,6 +507,7 @@ fn an_earlier_bare_prompt_does_not_make_a_busy_shell_idle() {
     assert_eq!(shell().classify(&screen).status, Some(Status::Working));
 }
 
+#[cfg(windows)]
 #[test]
 fn a_bare_prompt_at_the_bottom_is_idle_even_with_trailing_blank_rows() {
     let mut screen: Vec<String> = [
@@ -522,6 +524,7 @@ fn a_bare_prompt_at_the_bottom_is_idle_even_with_trailing_blank_rows() {
     assert_eq!(matched.rule.as_deref(), Some("powershell-prompt"));
 }
 
+#[cfg(windows)]
 #[test]
 fn a_cmd_prompt_at_the_bottom_is_idle() {
     let screen = [r"C:\Users\Hashim>echo hi", "hi", "", r"C:\Users\Hashim>"];
@@ -549,6 +552,7 @@ fn a_question_on_the_last_line_needs_you() {
     assert_eq!(shell().classify(&screen).status, Some(Status::NeedsYou));
 }
 
+#[cfg(windows)]
 #[test]
 fn an_answered_question_still_on_screen_does_not_need_you() {
     // Found live in step 6: after answering `n`, the session stayed NEEDS YOU,
@@ -560,6 +564,74 @@ fn an_answered_question_still_on_screen_does_not_need_you() {
         "Deploy to production. Are you sure (y/n): n",
         "n",
         r"PS C:\Users\Hashim>",
+    ];
+    let matched = shell().classify(&screen);
+    assert_eq!(
+        matched.status,
+        Some(Status::Idle),
+        "rule: {:?}",
+        matched.rule
+    );
+}
+
+// ---- the same shapes, on the shells Unix actually draws -------------------
+//
+// `sh-prompt` has to be loose about what comes before the sigil, because a
+// real prompt carries whatever the shell puts there: nothing for `dash`, the
+// host and directory for `zsh`. That looseness is why the rule is scoped to
+// Unix -- on Windows it would read a line of output ending in `45%` as a
+// prompt and call a busy session idle.
+
+#[cfg(unix)]
+#[test]
+fn the_shell_manifest_recognises_an_sh_prompt() {
+    let agent = shell();
+
+    // `dash`, as a GitHub Linux runner draws it: the sigil and nothing else.
+    let bare = ["hello-from-sh", "$"];
+    let matched = agent.classify(&bare);
+    assert_eq!(matched.status, Some(Status::Idle));
+    assert_eq!(matched.rule.as_deref(), Some("sh-prompt"));
+
+    // `zsh`, copied from a macOS runner. The host and the directory come
+    // first, which is what defeated a tighter pattern: the single-token form
+    // `^\S*[$#%]\s*$` matched the line above and not this one.
+    let zsh = [
+        "hello-from-zsh",
+        "runner@sjc22-bt143-a21a818d-d28d-476f-b38a-8c4a864afbd6-86E5A758F386 engine %",
+    ];
+    let matched = agent.classify(&zsh);
+    assert_eq!(matched.status, Some(Status::Idle));
+    assert_eq!(matched.rule.as_deref(), Some("sh-prompt"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_bare_sh_prompt_at_the_bottom_is_idle_even_with_trailing_blank_rows() {
+    let mut screen: Vec<String> = ["$ echo hi", "hi", "$"].map(String::from).to_vec();
+    screen.extend(std::iter::repeat_n(String::new(), 20));
+
+    let matched = shell().classify(&screen);
+    assert_eq!(matched.status, Some(Status::Idle));
+    assert_eq!(matched.rule.as_deref(), Some("sh-prompt"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_running_command_is_working_on_unix_too() {
+    // The command's own line ends in a digit, not a sigil, so the catch-all
+    // claims it. The prompt rule being loose must not make everything idle.
+    let screen = ["$ sleep 60"];
+    assert_eq!(shell().classify(&screen).status, Some(Status::Working));
+}
+
+#[cfg(unix)]
+#[test]
+fn an_answered_question_still_on_screen_does_not_need_you_on_unix() {
+    let screen = [
+        "$ read -p 'Deploy to production. Are you sure (y/n)' a",
+        "Deploy to production. Are you sure (y/n)n",
+        "$",
     ];
     let matched = shell().classify(&screen);
     assert_eq!(
@@ -865,6 +937,81 @@ fn a_manifest_that_names_no_program_at_all_is_refused() {
             assert!(error.to_string().contains("launch.on"), "{error}");
         }
         other => panic!("expected NoProgram, got {}", described(other)),
+    }
+}
+
+#[test]
+fn a_rule_can_name_the_platforms_it_applies_to() {
+    // Checked from whichever platform runs the tests, against the table
+    // rather than the compiled set, so every answer is visible from one
+    // machine.
+    let rule: argus_manifest::ScreenRule = serde_json::from_str(
+        r#"{ "name": "r", "status": "idle", "pattern": "x", "only_on": ["unix"] }"#,
+    )
+    .unwrap();
+    assert!(!rule.applies_to("windows"));
+    for os in ["linux", "macos", "freebsd"] {
+        assert!(rule.applies_to(os), "{os}");
+    }
+
+    let specific: argus_manifest::ScreenRule = serde_json::from_str(
+        r#"{ "name": "r", "status": "idle", "pattern": "x", "only_on": ["macos"] }"#,
+    )
+    .unwrap();
+    assert!(specific.applies_to("macos"));
+    assert!(!specific.applies_to("linux"));
+
+    let everywhere: argus_manifest::ScreenRule =
+        serde_json::from_str(r#"{ "name": "r", "status": "idle", "pattern": "x" }"#).unwrap();
+    for os in ["windows", "macos", "linux"] {
+        assert!(everywhere.applies_to(os), "{os}");
+    }
+}
+
+#[test]
+fn a_manifest_whose_every_rule_is_scoped_is_refused() {
+    // A platform with no applicable rule could never report a status, and it
+    // would fail silently: sessions that never leave `working`, with nothing
+    // to point at. Requiring one unscoped rule rules that out without having
+    // to enumerate platforms, and the catch-all a manifest needs anyway is
+    // exactly such a rule.
+    let json = r#"{
+      "id": "scoped",
+      "display_name": "Scoped",
+      "launch": { "program": "sh" },
+      "rules": [
+        { "name": "win", "status": "idle", "pattern": "x", "only_on": ["windows"] },
+        { "name": "nix", "status": "idle", "pattern": "x", "only_on": ["unix"] }
+      ]
+    }"#;
+    match Agent::from_json(json, "test.json") {
+        Err(error @ ManifestError::EveryRuleIsScoped { .. }) => {
+            assert!(error.to_string().contains("only_on"), "{error}");
+        }
+        other => panic!("expected EveryRuleIsScoped, got {}", described(other)),
+    }
+}
+
+#[test]
+fn a_bad_pattern_is_refused_even_in_a_rule_this_platform_skips() {
+    // Validity cannot depend on the platform, so every pattern is compiled
+    // whether or not this machine will use it. Otherwise a typo in a
+    // Windows-only rule would lie dormant until someone ran it on Windows.
+    let elsewhere = if cfg!(windows) { "linux" } else { "windows" };
+    let json = format!(
+        r#"{{
+          "id": "badpattern",
+          "display_name": "Bad Pattern",
+          "launch": {{ "program": "sh" }},
+          "rules": [
+            {{ "name": "busy", "status": "working", "pattern": "x" }},
+            {{ "name": "bad", "status": "idle", "pattern": "a(", "only_on": ["{elsewhere}"] }}
+          ]
+        }}"#
+    );
+    match Agent::from_json(&json, "test.json") {
+        Err(ManifestError::Pattern { rule, .. }) => assert_eq!(rule, "bad"),
+        other => panic!("expected a pattern error, got {}", described(other)),
     }
 }
 
