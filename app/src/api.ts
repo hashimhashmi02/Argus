@@ -44,9 +44,18 @@ export interface ScreenView {
   lines: string[];
 }
 
+/**
+ * One agent the engine can launch.
+ *
+ * `available` is absent when every agent can start, which is what an engine
+ * that predates per-platform programs always meant — so read a missing value
+ * as true, never as false.
+ */
 export interface AgentInfo {
   id: string;
   display_name: string;
+  /** Whether this agent can start on the machine the engine is on. */
+  available?: boolean;
 }
 
 /**

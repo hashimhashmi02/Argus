@@ -888,6 +888,7 @@ Each step is a working, runnable checkpoint — not a half-finished layer.
 | 14b | CI on three platforms, Linux and macOS first so the port has a target | **done** |
 | 14c | The engine, the CLI and the whole suite run on Linux and macOS | **done** |
 | 14d | `remote_watchers`, so the window says when someone else is watching | **done** |
+| 15 | `launch.on`: a manifest names a program per platform, so the shipped agents run where the engine does | **done** |
 
 The UI is last on purpose. A UI built on an unstable protocol locks in the
 mistakes of that protocol.
@@ -908,14 +909,69 @@ loose end hidden by a green tick:
   macOS jobs and will be added when someone has run it there.
 - **The installer** is PowerShell, and **npm packaging** ships a Windows binary.
   Both are distribution, which comes after the thing being distributed works.
-- **Agent manifests name Windows programs.** `resolve_shell` looks for `pwsh`,
-  `powershell` and `cmd`, and `manifests/shell.json` asks for `powershell.exe`.
-  So the engine builds, serves and is watched over QUIC on Linux, but
-  `argus-cli spawn shell` has nothing to spawn. Fixing it is a schema decision
-  -- whether a manifest names one program or one per platform -- and inventing
-  that schema quietly inside a port is how a format gets decided by accident.
-  The tests do not paper over it: each one picks `cmd.exe` or `/bin/sh` for the
-  platform it is on, which is exactly the choice a manifest will have to express.
+- **Agent manifests named Windows programs.** `manifests/shell.json` asked for
+  `powershell.exe`, so the engine built, served and was watched over QUIC on
+  Linux while `argus-cli spawn shell` had nothing to spawn. That was left out
+  of the port on purpose -- it is a schema decision, and inventing a file
+  format quietly inside a port is how formats get decided by accident -- and
+  [step 15](#naming-a-program-per-platform) settled it.
+
+### Naming a program per platform
+
+An agent manifest says what to run. Once the engine ran on three platforms,
+that one string had to answer three questions, and for the shell it had three
+different answers.
+
+`launch.on` holds them, keyed by `windows`, `macos`, `linux` or `unix`, each
+entry overriding only the fields of `launch` it names. Three choices in it are
+worth the words:
+
+**The common case stays a single string.** Almost every agent -- `claude`,
+`aider`, a script -- is one program with one name, and `"program": "claude"`
+goes on meaning every platform. A schema that made the ordinary case pay for
+the unusual one would be a worse schema, and every manifest already written
+would have had to change.
+
+**Argument lists replace rather than merge.** Order carries meaning on a
+command line, and a merge can add but never remove, so a platform that needs
+different flags states them. `Option<Vec<String>>` rather than `Vec<String>`,
+which makes `"args": []` a real answer and not an absence.
+
+**`unix` is consulted only off Windows.** So a manifest cannot hand a Windows
+machine a `/bin` path by forgetting a `windows` entry; it gets "not here", which
+is true and fixable.
+
+That last point is the one that shapes the rest. `launch.program` is optional,
+so "this agent exists on some platforms and not others" is sayable -- and it
+has to be answered without lying in either direction:
+
+- **Not startable here is reported, never hidden.** The agent is listed, with a
+  `WHERE` column in `argus-cli agents` and struck through in the window's
+  picker, and `spawn` is refused before exec with the key to add. An agent
+  missing from a list with no explanation sends someone to their package
+  manager when the answer is a line of JSON.
+- **Not startable *anywhere* is refused at load**, because it cannot be
+  anything but a mistake.
+- **Validity does not depend on the platform.** One manifest that will not load
+  refuses the whole directory, so a set that starts the engine on Windows and
+  refuses to start it on Linux would be a trap. The `{session_uuid}` check
+  therefore runs against every command line the manifest can produce, not the
+  one this machine happens to get.
+
+The deliberate hole is that a misspelt key -- `windwos` -- loads. Refusing
+unknown keys would refuse a manifest written for a platform a newer Argus runs
+on, and these files are copied between machines and outlive the version that
+wrote them. The typo instead shows up as an agent that starts nowhere, and the
+spawn error prints the keys the manifest does have beside the one it wanted,
+which is what makes it obvious rather than mysterious.
+
+`rules` are *not* per-platform, and did not need to be. They are already a
+priority-ordered list in which a rule that does not match costs nothing, so
+`shell.json` simply carries a prompt rule for PowerShell, one for `cmd` and one
+for `sh`. The `sh` pattern is tighter than it would have to be on Unix alone
+(`^\S*[$#%]\s*$`, a single token rather than anything ending in `$`) precisely
+because it is also live on Windows, where a loose version could misread a line
+of output as a prompt.
 
 ### On `portable-pty` vs raw ConPTY
 

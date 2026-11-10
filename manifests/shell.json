@@ -2,8 +2,11 @@
   "id": "shell",
   "display_name": "Shell",
   "launch": {
-    "program": "powershell.exe",
-    "args": ["-NoLogo"]
+    "on": {
+      "windows": { "program": "powershell.exe", "args": ["-NoLogo"] },
+      "macos": { "program": "/bin/zsh", "args": ["-i"] },
+      "unix": { "program": "/bin/sh", "args": ["-i"] }
+    }
   },
   "env_scrub_prefixes": ["ARGUS_"],
   "keys": {
@@ -29,6 +32,13 @@
       "name": "cmd-prompt",
       "status": "idle",
       "pattern": "^[A-Za-z]:\\\\[^\\n]*>\\s*$",
+      "priority": 10,
+      "region": { "last_lines": 1 }
+    },
+    {
+      "name": "sh-prompt",
+      "status": "idle",
+      "pattern": "^\\S*[$#%]\\s*$",
       "priority": 10,
       "region": { "last_lines": 1 }
     },

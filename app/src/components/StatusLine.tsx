@@ -303,14 +303,27 @@ function InvitePrompt(props: Props & { prompt: { id: string; token: string } }) 
   );
 }
 
+/**
+ * Whether this agent can start here.
+ *
+ * Absent means yes: an engine that predates per-platform programs could start
+ * every agent it listed, so a missing flag has to read as available.
+ */
+function canStart(agent: AgentInfo): boolean {
+  return agent.available !== false;
+}
+
 function NewPrompt(props: Props) {
   const { agents } = props;
-  const [at, setAt] = useState(0);
+  // An agent that cannot start here is still shown -- one missing from the
+  // list with no explanation sends you looking at your install -- so the
+  // cursor starts on one that can, and skips the rest.
+  const [at, setAt] = useState(() => Math.max(0, agents.findIndex(canStart)));
   const [cwd, setCwd] = useState("");
   const [branch, setBranch] = useState("");
   const chosen = agents[at];
   const start = () => {
-    if (chosen) props.onSpawn(chosen.id, cwd, branch);
+    if (chosen && canStart(chosen)) props.onSpawn(chosen.id, cwd, branch);
   };
   const onKeyDown = (e: React.KeyboardEvent) => {
     // By hand: a form with two text fields and no submit button is not
@@ -321,10 +334,20 @@ function NewPrompt(props: Props) {
     }
     if (e.key === "Escape") props.onCancel();
     // Up and Down pick the agent, so the whole prompt works from the keyboard.
-    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && agents.length > 0) {
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && agents.some(canStart)) {
       e.preventDefault();
       const by = e.key === "ArrowDown" ? 1 : -1;
-      setAt((i) => (i + by + agents.length) % agents.length);
+      // Steps over the agents that cannot start here rather than landing on
+      // one and refusing to go. Bounded by the list's length, and the guard
+      // above guarantees there is somewhere to land.
+      setAt((i) => {
+        let next = i;
+        for (let step = 0; step < agents.length; step += 1) {
+          next = (next + by + agents.length) % agents.length;
+          if (canStart(agents[next])) return next;
+        }
+        return i;
+      });
     }
   };
 
@@ -345,7 +368,9 @@ function NewPrompt(props: Props) {
             role="radio"
             aria-checked={i === at}
             key={a.id}
-            className="agent"
+            className={canStart(a) ? "agent" : "agent is-elsewhere"}
+            disabled={!canStart(a)}
+            title={canStart(a) ? undefined : "its manifest names no program for this platform"}
             onMouseDown={keepFocus}
             onClick={() => setAt(i)}
           >

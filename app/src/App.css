@@ -600,6 +600,15 @@ button.engine:hover {
   color: var(--bright-yellow);
 }
 
+/* An agent whose manifest names no program for this platform. Shown rather
+   than hidden, because an agent missing with no explanation sends you looking
+   at your install when the answer is a line of JSON. */
+.agent.is-elsewhere {
+  color: var(--bright-black);
+  text-decoration: line-through;
+  cursor: not-allowed;
+}
+
 /* ---- Whole-window notices: no server, no sessions ------------------------- */
 
 .notice {

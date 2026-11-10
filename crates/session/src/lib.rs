@@ -118,7 +118,16 @@ impl Session {
             .args(config.start, agent_session.as_deref())
             .with_context(|| format!("agent `{}` has no `resume` in its manifest", manifest.id))?;
 
-        let mut spawn_config = SpawnConfig::new(&manifest.launch.program)
+        let program = agent.program().with_context(|| {
+            format!(
+                "agent `{}` does not say how to start on {}; add `launch.on.{}` to its manifest",
+                manifest.id,
+                std::env::consts::OS,
+                std::env::consts::OS,
+            )
+        })?;
+
+        let mut spawn_config = SpawnConfig::new(program)
             .args(args)
             .size(config.cols, config.rows);
         spawn_config.scrub_env_prefixes = manifest.env_scrub_prefixes.clone();

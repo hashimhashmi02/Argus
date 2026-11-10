@@ -8,7 +8,7 @@ use argus_reducer::ScreenMatch;
 use regex::Regex;
 
 use crate::error::ManifestError;
-use crate::schema::{AgentManifest, Region, SESSION_UUID, ScreenRule};
+use crate::schema::{AgentManifest, Region, ResolvedLaunch, SESSION_UUID, ScreenRule};
 
 /// An agent definition that is ready to use.
 ///
@@ -23,6 +23,8 @@ pub struct Agent {
     rules: Vec<CompiledRule>,
     /// Whether any command line mentions [`SESSION_UUID`].
     wants_session_uuid: bool,
+    /// What this platform runs, worked out once from `manifest.launch.on`.
+    launch: ResolvedLaunch,
 }
 
 /// Which command line to build.
@@ -109,21 +111,39 @@ impl Agent {
         // of whichever sort implementation is in use.
         rules.sort_by_key(|compiled| Reverse(compiled.rule.priority));
 
+        // A manifest that could not start anywhere is a mistake rather than a
+        // choice: a missing `program`, or a key under `on` that no platform is
+        // called. Being startable somewhere but not *here* is a different
+        // thing, and is reported at spawn rather than refused at load.
+        if !manifest.launch.names_a_program_somewhere() {
+            return Err(ManifestError::NoProgram { id: manifest.id });
+        }
+
         let mentions = |args: &[String]| args.iter().any(|arg| arg.contains(SESSION_UUID));
-        let launch = &manifest.launch;
-        let at_launch = mentions(&launch.args) || mentions(&launch.new_session_args);
         let at_resume = manifest.resume.as_ref().is_some_and(|r| mentions(&r.args));
         // Resuming by an id that no launch ever handed the agent would ask it
         // for a conversation that cannot exist. Caught here, against the file,
         // rather than as an agent's "no conversation found" days later.
-        if at_resume && !at_launch {
+        //
+        // Checked against every platform's command line, not this one's, so
+        // that a manifest is valid or invalid everywhere. One manifest that
+        // will not load refuses the whole directory, and a set that starts the
+        // engine on Windows but not on Linux would be a trap.
+        let at_launch =
+            |launch: &ResolvedLaunch| mentions(&launch.args) || mentions(&launch.new_session_args);
+        if at_resume && !manifest.launch.every_resolution().iter().all(at_launch) {
             return Err(ManifestError::ResumeWithoutSessionUuid { id: manifest.id });
         }
 
+        // Resolved once, here, because the platform does not change while the
+        // process runs and every caller downstream wants the answer, not the
+        // table.
+        let launch = manifest.launch.resolve_for(std::env::consts::OS);
         Ok(Self {
             manifest,
             rules,
-            wants_session_uuid: at_launch,
+            wants_session_uuid: at_launch(&launch),
+            launch,
         })
     }
 
@@ -146,6 +166,21 @@ impl Agent {
         self.manifest.resume.is_some()
     }
 
+    /// The program to run on this platform.
+    ///
+    /// `None` means the manifest names a program for some platforms and not
+    /// this one. That is a fact to report, not a failure: the agent still
+    /// appears in listings, where saying "not on this platform" is more use
+    /// than leaving someone to wonder why it is missing.
+    pub fn program(&self) -> Option<&str> {
+        self.launch.program.as_deref()
+    }
+
+    /// Whether this platform can start this agent at all.
+    pub fn available_here(&self) -> bool {
+        self.launch.program.is_some()
+    }
+
     /// The arguments to start a session with, `{session_uuid}` filled in.
     ///
     /// `None` for [`Start::Resume`] when the manifest has no `resume`. A
@@ -153,7 +188,7 @@ impl Agent {
     /// that wants one rejects loudly; a caller that knows the agent
     /// [wants one](Self::wants_session_uuid) should not pass `None`.
     pub fn args(&self, start: Start, session_uuid: Option<&str>) -> Option<Vec<String>> {
-        let launch = &self.manifest.launch;
+        let launch = &self.launch;
         let extra = match start {
             Start::New => &launch.new_session_args,
             Start::Resume => &self.manifest.resume.as_ref()?.args,

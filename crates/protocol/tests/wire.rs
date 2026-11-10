@@ -324,11 +324,30 @@ fn the_ui_methods_have_a_stable_shape() {
         json(&Response::Ok(Reply::Agents {
             agents: vec![argus_protocol::AgentInfo {
                 id: "shell".into(),
-                display_name: "Shell".into()
+                display_name: "Shell".into(),
+                available: true,
             }]
         })),
         r#"{"ok":{"kind":"agents","agents":[{"id":"shell","display_name":"Shell"}]}}"#
     );
+}
+
+#[test]
+fn an_agent_is_available_unless_the_engine_says_otherwise() {
+    // This flag defaults the opposite way to the rest: absent means available.
+    // An engine that predates per-platform programs could start every agent it
+    // listed, so a reply without the field has to read as "all of them", not
+    // as "none of them".
+    let old = r#"{"id":"shell","display_name":"Shell"}"#;
+    let info: argus_protocol::AgentInfo = serde_json::from_str(old).unwrap();
+    assert!(info.available);
+
+    let elsewhere = argus_protocol::AgentInfo {
+        id: "shell".into(),
+        display_name: "Shell".into(),
+        available: false,
+    };
+    assert!(json(&elsewhere).contains(r#""available":false"#));
 }
 
 #[test]
